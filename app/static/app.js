@@ -2,6 +2,9 @@
 
 const graphEl = document.getElementById("graph");
 const coNetworkEl = document.getElementById("co-network");
+const personGraphEl = document.getElementById("person-graph");
+const personKeyEl = document.getElementById("person-key");
+const personBindingsEl = document.getElementById("person-bindings");
 const detailsEl = document.getElementById("details");
 const statsEl = document.getElementById("stats");
 
@@ -16,6 +19,7 @@ const toplistTextEl = document.getElementById("toplist-text");
 const viewButtons = Array.from(document.querySelectorAll(".view-btn"));
 const viewPanes = {
   graph: document.getElementById("view-graph"),
+  person: document.getElementById("view-person"),
   timeline: document.getElementById("view-timeline"),
   toplists: document.getElementById("view-toplists"),
   coboard: document.getElementById("view-coboard"),
@@ -28,9 +32,11 @@ const topPersonRolesCanvas = document.getElementById("top-person-roles");
 
 let network;
 let coNetwork;
+let personNetwork;
 let activeView = "graph";
 let currentGraph = { nodes: [], edges: [] };
 let currentCoBoard = { nodes: [], edges: [] };
+let currentPersonDrilldown = { nodes: [], edges: [], bindings: [], person: null };
 
 let timelineRolesChart;
 let timelineFundingChart;
@@ -129,6 +135,9 @@ function setActiveView(view) {
   if (view === "graph" && network) {
     network.redraw();
   }
+  if (view === "person" && personNetwork) {
+    personNetwork.redraw();
+  }
   if (view === "coboard" && coNetwork) {
     coNetwork.redraw();
   }
@@ -202,6 +211,254 @@ function showCoBoardEdgeDetails(edgeId) {
     <p>Delte personer:</p>
     <ul>${persons || "<li>Ingen navn tilgjengelig</li>"}</ul>
   `;
+}
+
+function formatYearSpan(startYear, endYear) {
+  if (startYear && endYear) {
+    return `${startYear}-${endYear}`;
+  }
+  if (startYear) {
+    return `${startYear}-`;
+  }
+  if (endYear) {
+    return `-${endYear}`;
+  }
+  return "ukjent periode";
+}
+
+function syncPersonOptions(availableProfiles, selectedKey) {
+  if (!personKeyEl) {
+    return;
+  }
+  const profiles = availableProfiles || [];
+  const optionsHtml = profiles
+    .map((profile) => {
+      const key = profile.key || "";
+      const label = profile.display_name || key;
+      return `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`;
+    })
+    .join("\n");
+
+  personKeyEl.innerHTML = optionsHtml;
+  if (!profiles.length) {
+    return;
+  }
+
+  const current = selectedKey || personKeyEl.value || profiles[0].key;
+  const match = profiles.find((profile) => profile.key === current) || profiles[0];
+  personKeyEl.value = match.key;
+}
+
+function showPersonEdgeDetails(edgeId) {
+  const edge = currentPersonDrilldown.edges.find((e) => e.id === edgeId);
+  if (!edge) {
+    return;
+  }
+
+  const fromNode = currentPersonDrilldown.nodes.find((n) => n.id === edge.from);
+  const toNode = currentPersonDrilldown.nodes.find((n) => n.id === edge.to);
+  const metadata = {
+    ...edge.metadata,
+    fra: fromNode ? fromNode.label : edge.from,
+    til: toNode ? toNode.label : edge.to,
+  };
+
+  const sources = (edge.sources || []).map(sourceCard).join("\n");
+  detailsEl.innerHTML = `
+    <h2>Kildepanel</h2>
+    <h3>${escapeHtml(edge.title || edge.label || "Binding")}</h3>
+    <p>${escapeHtml((fromNode ? fromNode.label : "Person") + " -> " + (toNode ? toNode.label : ""))}</p>
+    ${metadataGrid(metadata)}
+    <h3>Kilder (${(edge.sources || []).length})</h3>
+    ${sources || "<p>Ingen kilder registrert.</p>"}
+  `;
+}
+
+function showPersonNodeDetails(nodeId) {
+  const node = currentPersonDrilldown.nodes.find((n) => n.id === nodeId);
+  if (!node) {
+    return;
+  }
+  const edgeCount = currentPersonDrilldown.edges.filter(
+    (edge) => edge.from === nodeId || edge.to === nodeId,
+  ).length;
+  const outside = node.type === "external_institution";
+
+  detailsEl.innerHTML = `
+    <h2>Kildepanel</h2>
+    <h3>${escapeHtml(node.label)}</h3>
+    <p>${escapeHtml(node.subtitle || node.type || "")}</p>
+    <div class="meta-grid">
+      <div class="meta-item"><b>type</b><span>${escapeHtml(node.type || "")}</span></div>
+      <div class="meta-item"><b>relasjoner</b><span>${edgeCount}</span></div>
+      <div class="meta-item"><b>utenfor datagrunnlag</b><span>${outside ? "ja" : "nei"}</span></div>
+    </div>
+    <p>Klikk på en binding for kilder.</p>
+  `;
+}
+
+function personNodeStyle(node) {
+  if (node.type === "person_focus") {
+    return {
+      shape: "star",
+      size: 24,
+      color: {
+        background: "#51c9b0",
+        border: "#157b6d",
+      },
+      font: { color: "#173a33", size: 15, face: "Space Grotesk" },
+    };
+  }
+
+  if (node.type === "external_institution") {
+    return {
+      shape: "hexagon",
+      color: {
+        background: "#ffe4d1",
+        border: "#bf6428",
+      },
+      font: { color: "#4a2714", size: 12, face: "Space Grotesk" },
+      margin: 8,
+    };
+  }
+
+  if (node.type === "organization") {
+    return {
+      shape: "box",
+      color: {
+        background: "#f7f3ff",
+        border: "#6a55a4",
+      },
+      font: { color: "#2f2750", size: 12, face: "Space Grotesk" },
+      margin: 8,
+    };
+  }
+
+  return nodeStyle(node);
+}
+
+function personEdgeStyle(edge) {
+  if (edge.source_kind === "dataset") {
+    return {
+      color: { color: "#188776", highlight: "#10685a" },
+      width: 2.2,
+      dashes: false,
+      arrows: { to: { enabled: true, scaleFactor: 0.6 } },
+      font: { align: "middle", size: 10, face: "IBM Plex Mono", color: "#205146" },
+    };
+  }
+
+  return {
+    color: { color: "#b96a2f", highlight: "#8c4f23" },
+    width: 2.5,
+    dashes: [10, 6],
+    arrows: { to: { enabled: true, scaleFactor: 0.65 } },
+    font: { align: "middle", size: 10, face: "IBM Plex Mono", color: "#6b3515" },
+  };
+}
+
+function renderPersonBindings(payload) {
+  if (!personBindingsEl) {
+    return;
+  }
+
+  const bindings = payload.bindings || [];
+  const rows = bindings
+    .map((binding) => {
+      const chips = [
+        binding.source_kind === "dataset" ? "Datagrunnlag" : "Kuratert",
+        binding.outside_dataset ? "Utenfor datagrunnlag" : "I datagrunnlag",
+      ];
+      const chipHtml = chips
+        .map((chip) => `<span class="binding-chip">${escapeHtml(chip)}</span>`)
+        .join("");
+      const period = formatYearSpan(binding.start_year, binding.end_year);
+      return `
+        <button class="binding-item" data-edge-id="${escapeHtml(binding.id)}">
+          <div class="binding-head">
+            <b>${escapeHtml(binding.institution_name || "Ukjent institusjon")}</b>
+            <div>${chipHtml}</div>
+          </div>
+          <p>${escapeHtml(binding.role_title || "Binding")} · ${escapeHtml(period)}</p>
+        </button>
+      `;
+    })
+    .join("\n");
+
+  const personName = payload.person ? payload.person.display_name : "Person";
+  personBindingsEl.innerHTML = `
+    <h3>Bindinger for ${escapeHtml(personName || "person")}</h3>
+    <div class="binding-items">
+      ${rows || "<p>Ingen bindinger i valgt filter.</p>"}
+    </div>
+  `;
+
+  personBindingsEl.querySelectorAll("[data-edge-id]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const edgeId = el.getAttribute("data-edge-id");
+      if (edgeId) {
+        showPersonEdgeDetails(edgeId);
+      }
+    });
+  });
+}
+
+function renderPersonDrilldown(payload) {
+  currentPersonDrilldown = payload;
+  syncPersonOptions(payload.available_profiles, payload.person && payload.person.key);
+  renderPersonBindings(payload);
+
+  if (!personGraphEl) {
+    return;
+  }
+
+  const nodes = new vis.DataSet(
+    (payload.nodes || []).map((node) => ({
+      ...node,
+      ...personNodeStyle(node),
+    })),
+  );
+  const edges = new vis.DataSet(
+    (payload.edges || []).map((edge) => ({
+      ...edge,
+      ...personEdgeStyle(edge),
+    })),
+  );
+  const data = { nodes, edges };
+  const options = {
+    autoResize: true,
+    interaction: {
+      hover: true,
+      multiselect: false,
+      navigationButtons: true,
+    },
+    physics: {
+      stabilization: { iterations: 220, fit: true },
+      barnesHut: {
+        gravitationalConstant: -5600,
+        centralGravity: 0.18,
+        springLength: 140,
+        springConstant: 0.05,
+        damping: 0.28,
+      },
+    },
+  };
+
+  if (!personNetwork) {
+    personNetwork = new vis.Network(personGraphEl, data, options);
+    personNetwork.on("selectEdge", (params) => {
+      if (params.edges && params.edges.length > 0) {
+        showPersonEdgeDetails(params.edges[0]);
+      }
+    });
+    personNetwork.on("selectNode", (params) => {
+      if (params.nodes && params.nodes.length > 0) {
+        showPersonNodeDetails(params.nodes[0]);
+      }
+    });
+  } else {
+    personNetwork.setData(data);
+  }
 }
 
 function nodeStyle(node) {
@@ -569,16 +826,19 @@ function renderToplists(payload) {
   `;
 }
 
-function updateStats(graphStats, timelinePayload, coboardStats) {
+function updateStats(graphStats, timelinePayload, coboardStats, personStats) {
   const s = graphStats || {};
   const years = (timelinePayload && timelinePayload.years ? timelinePayload.years.length : 0) || 0;
   const coboardEdges = (coboardStats && coboardStats.edges) || 0;
+  const personEdges = (personStats && personStats.edges) || 0;
+  const outsideInstitutions =
+    (personStats && personStats.outside_dataset_institutions) || 0;
   const fundingText = s.funding_edges_truncated
     ? `${s.funding_edges || 0}/${s.funding_edges_total_matched || 0}`
     : `${s.funding_edges || 0}`;
   statsEl.textContent = `noder=${s.nodes || 0} | kanter=${s.edges || 0} | roller=${
     s.role_edges || 0
-  } | funding=${fundingText} | år=${years} | co-board=${coboardEdges}`;
+  } | funding=${fundingText} | år=${years} | co-board=${coboardEdges} | drilldown=${personEdges} | ekst-inst=${outsideInstitutions}`;
 }
 
 async function fetchJson(url) {
@@ -597,25 +857,39 @@ async function loadAllViews() {
   const timelineParams = new URLSearchParams(params);
   timelineParams.delete("include_roles");
   timelineParams.delete("include_funding");
+  const personParams = new URLSearchParams(timelineParams);
+  const personKey = qp(personKeyEl && personKeyEl.value);
+  if (personKey) {
+    personParams.set("person_key", personKey);
+  }
 
   try {
-    const [graphPayload, timelinePayload, toplistsPayload, coboardPayload] = await Promise.all([
-      fetchJson(`/api/graph?${params.toString()}`),
-      fetchJson(`/api/timeline?${timelineParams.toString()}`),
-      fetchJson(`/api/toplists?${timelineParams.toString()}`),
-      fetchJson(`/api/coboard?${timelineParams.toString()}`),
-    ]);
+    const [graphPayload, personPayload, timelinePayload, toplistsPayload, coboardPayload] =
+      await Promise.all([
+        fetchJson(`/api/graph?${params.toString()}`),
+        fetchJson(`/api/person-drilldown?${personParams.toString()}`),
+        fetchJson(`/api/timeline?${timelineParams.toString()}`),
+        fetchJson(`/api/toplists?${timelineParams.toString()}`),
+        fetchJson(`/api/coboard?${timelineParams.toString()}`),
+      ]);
 
     renderGraph(graphPayload);
+    renderPersonDrilldown(personPayload);
     renderTimeline(timelinePayload);
     renderToplists(toplistsPayload);
     renderCoBoard(coboardPayload);
-    updateStats(graphPayload.stats, timelinePayload, coboardPayload.stats);
+    updateStats(graphPayload.stats, timelinePayload, coboardPayload.stats, personPayload.stats);
 
     if (activeView === "timeline") {
       detailsEl.innerHTML = `
         <h2>Kildepanel</h2>
         <p>Tidslinjevisningen viser utvikling i roller og finansiering per år i valgt filter.</p>
+      `;
+    }
+    if (activeView === "person") {
+      detailsEl.innerHTML = `
+        <h2>Kildepanel</h2>
+        <p>Person-drilldown er klar. Klikk bindinger i grafen eller listen for kilder.</p>
       `;
     }
   } catch (err) {
@@ -632,6 +906,12 @@ async function loadAllViews() {
 applyEl.addEventListener("click", () => {
   loadAllViews();
 });
+
+if (personKeyEl) {
+  personKeyEl.addEventListener("change", () => {
+    loadAllViews();
+  });
+}
 
 viewButtons.forEach((button) => {
   button.addEventListener("click", () => {

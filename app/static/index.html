@@ -57,6 +57,7 @@
       <section class="viz-card">
         <div class="view-tabs">
           <button class="view-btn active" data-view="graph">Nettverk</button>
+          <button class="view-btn" data-view="person">Person-drilldown</button>
           <button class="view-btn" data-view="timeline">Tidslinje</button>
           <button class="view-btn" data-view="toplists">Topplister</button>
           <button class="view-btn" data-view="coboard">Brokoblinger</button>
@@ -64,6 +65,21 @@
 
         <div class="view-pane active" id="view-graph">
           <div id="graph"></div>
+        </div>
+
+        <div class="view-pane" id="view-person">
+          <div class="person-toolbar">
+            <label>
+              Person
+              <select id="person-key"></select>
+            </label>
+          </div>
+          <div class="person-grid">
+            <div class="person-graph-wrap">
+              <div id="person-graph"></div>
+            </div>
+            <div class="person-bindings" id="person-bindings"></div>
+          </div>
         </div>
 
         <div class="view-pane" id="view-timeline">

@@ -50,6 +50,138 @@ def external_recipient_key(name: str) -> str:
     return key or "unknown"
 
 
+def slug_key(text: str) -> str:
+    text = (text or "").strip().lower()
+    text = text.replace("æ", "ae").replace("ø", "o").replace("å", "a")
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")
+
+
+PERSON_DRILLDOWN_PROFILES: dict[str, dict[str, Any]] = {
+    "torbjorn-jagland": {
+        "display_name": "Torbjørn Jagland",
+        "aliases": [
+            "Torbjørn Jagland",
+            "Thorbjørn Jagland",
+            "Torbjorn Jagland",
+            "Thorbjorn Jagland",
+        ],
+        "curated_bindings": [
+            {
+                "institution_name": "Den norske Nobelkomité",
+                "institution_type": "committee",
+                "role_title": "Leder",
+                "relation_type": "appointment",
+                "start_year": 2009,
+                "end_year": 2015,
+                "outside_dataset": True,
+                "notes": "Kuratert binding lagt inn for person-drilldown.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Torbjørn Jagland",
+                        "url": "https://no.wikipedia.org/wiki/Torbj%C3%B8rn_Jagland",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Stortinget",
+                "institution_type": "parliament",
+                "role_title": "Stortingsrepresentant / Stortingspresident",
+                "relation_type": "office",
+                "start_year": 1993,
+                "end_year": 2009,
+                "outside_dataset": True,
+                "notes": "Kuratert binding lagt inn for person-drilldown.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Torbjørn Jagland",
+                        "url": "https://no.wikipedia.org/wiki/Torbj%C3%B8rn_Jagland",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Det norske Arbeiderparti",
+                "institution_type": "political_party",
+                "role_title": "Partileder",
+                "relation_type": "office",
+                "start_year": 1992,
+                "end_year": 2002,
+                "outside_dataset": True,
+                "notes": "Kuratert binding lagt inn for person-drilldown.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Torbjørn Jagland",
+                        "url": "https://no.wikipedia.org/wiki/Torbj%C3%B8rn_Jagland",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Statsministerens kontor",
+                "institution_type": "government",
+                "role_title": "Statsminister",
+                "relation_type": "office",
+                "start_year": 1996,
+                "end_year": 1997,
+                "outside_dataset": True,
+                "notes": "Kuratert binding lagt inn for person-drilldown.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Torbjørn Jagland",
+                        "url": "https://no.wikipedia.org/wiki/Torbj%C3%B8rn_Jagland",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Utenriksdepartementet",
+                "institution_type": "government",
+                "role_title": "Utenriksminister",
+                "relation_type": "office",
+                "start_year": 2000,
+                "end_year": 2001,
+                "outside_dataset": True,
+                "notes": "Kuratert binding lagt inn for person-drilldown.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Torbjørn Jagland",
+                        "url": "https://no.wikipedia.org/wiki/Torbj%C3%B8rn_Jagland",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+        ],
+    }
+}
+DEFAULT_PERSON_DRILLDOWN_KEY = "torbjorn-jagland"
+
+
+def resolve_person_profile(person_key: str | None) -> tuple[str, dict[str, Any]]:
+    candidate = slug_key(person_key or DEFAULT_PERSON_DRILLDOWN_KEY) or DEFAULT_PERSON_DRILLDOWN_KEY
+    if candidate in PERSON_DRILLDOWN_PROFILES:
+        return candidate, PERSON_DRILLDOWN_PROFILES[candidate]
+
+    for key, profile in PERSON_DRILLDOWN_PROFILES.items():
+        aliases = [
+            key,
+            profile.get("display_name", ""),
+            *profile.get("aliases", []),
+        ]
+        normalized = {slug_key(a) for a in aliases if a}
+        if candidate in normalized:
+            return key, profile
+
+    available = ", ".join(sorted(PERSON_DRILLDOWN_PROFILES))
+    raise HTTPException(status_code=404, detail=f"Unknown person key. Available: {available}")
+
+
 def format_amount(amount: float | None, currency: str | None) -> str:
     if amount is None:
         return "?"
@@ -153,6 +285,74 @@ def fetch_role_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
         """
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def fetch_person_role_rows(conn: psycopg.Connection, aliases: list[str]) -> list[dict[str, Any]]:
+    normalized_aliases = sorted({a.strip().lower() for a in aliases if a and a.strip()})
+    if not normalized_aliases:
+        return []
+
+    rows = conn.execute(
+        """
+        SELECT
+          r.id,
+          r.role_title,
+          r.role_level,
+          r.norwegian_position_before,
+          r.announced_on,
+          r.start_on,
+          r.end_on,
+          p.id AS person_id,
+          p.canonical_name AS person_name,
+          o.id AS org_id,
+          o.canonical_name AS org_name
+        FROM role_event r
+        JOIN person p ON p.id = r.person_id
+        JOIN organization o ON o.id = r.organization_id
+        WHERE lower(p.canonical_name) = ANY(%s)
+        ORDER BY COALESCE(r.start_on, r.announced_on, r.end_on) DESC NULLS LAST, r.id DESC
+        """,
+        (normalized_aliases,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fetch_role_sources(
+    conn: psycopg.Connection,
+    role_event_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    ids = sorted({int(i) for i in role_event_ids})
+    if not ids:
+        return {}
+
+    rows = conn.execute(
+        """
+        SELECT
+          rsd.role_event_id,
+          s.source_name,
+          s.url,
+          s.doc_type,
+          rsd.relation_type
+        FROM role_event_source_document rsd
+        JOIN source_document s ON s.id = rsd.source_document_id
+        WHERE rsd.role_event_id = ANY(%s)
+        ORDER BY rsd.role_event_id, s.id
+        """,
+        (ids,),
+    ).fetchall()
+
+    out: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        role_id = int(row["role_event_id"])
+        out[role_id].append(
+            {
+                "source_name": row["source_name"],
+                "url": row["url"],
+                "doc_type": row["doc_type"],
+                "relation_type": row["relation_type"],
+            }
+        )
+    return out
 
 
 def fetch_funding_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
@@ -621,6 +821,246 @@ def coboard(
                 "nodes": len(nodes),
                 "edges": len(edges),
                 "max_shared": max((e["shared_count"] for e in edges), default=0),
+            },
+        }
+    )
+
+
+@app.get("/api/person-drilldown")
+def person_drilldown(
+    person_key: str | None = Query(default=DEFAULT_PERSON_DRILLDOWN_KEY),
+    q: str | None = Query(default=None),
+    year_from: int | None = Query(default=None),
+    year_to: int | None = Query(default=None),
+) -> JSONResponse:
+    profile_key, profile = resolve_person_profile(person_key)
+    aliases = [
+        profile.get("display_name", ""),
+        *profile.get("aliases", []),
+    ]
+
+    dsn = get_dsn()
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        db_role_rows = filter_role_rows(
+            fetch_person_role_rows(conn, aliases),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+        role_sources = fetch_role_sources(conn, [int(row["id"]) for row in db_role_rows])
+
+    person_name = profile.get("display_name", "Ukjent person")
+    person_node_id = f"profile-person:{profile_key}"
+    if db_role_rows:
+        person_name = db_role_rows[0]["person_name"] or person_name
+        person_node_id = f"person:{db_role_rows[0]['person_id']}"
+
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+    bindings: list[dict[str, Any]] = []
+    org_name_to_node_id: dict[str, str] = {}
+
+    def add_node(node_id: str, label: str, node_type: str, subtitle: str | None = None) -> None:
+        if node_id in nodes:
+            return
+        nodes[node_id] = {
+            "id": node_id,
+            "label": label,
+            "type": node_type,
+            "subtitle": subtitle,
+        }
+
+    add_node(person_node_id, person_name, "person_focus", "Person-drilldown")
+
+    for row in db_role_rows:
+        org_id = f"org:{row['org_id']}"
+        add_node(org_id, row["org_name"], "organization", "Fra datagrunnlag")
+        org_name_to_node_id[external_recipient_key(row["org_name"])] = org_id
+
+        start_year = row["start_on"].year if row["start_on"] else None
+        end_year = row["end_on"].year if row["end_on"] else None
+        edge_id = f"person-role:{row['id']}"
+        edge_sources = role_sources.get(int(row["id"]), [])
+        role_title = row["role_title"] or "Rolle"
+
+        edge_payload = {
+            "id": edge_id,
+            "from": person_node_id,
+            "to": org_id,
+            "type": "person_role",
+            "source_kind": "dataset",
+            "outside_dataset": False,
+            "label": short_label(role_title, limit=32),
+            "title": role_title,
+            "year": row.get("anchor_year"),
+            "metadata": {
+                "role_title": role_title,
+                "role_level": row.get("role_level"),
+                "start_year": start_year,
+                "end_year": end_year,
+                "source_kind": "dataset",
+                "outside_dataset": False,
+            },
+            "sources": edge_sources,
+        }
+        edges.append(edge_payload)
+        bindings.append(
+            {
+                "id": edge_id,
+                "institution_node_id": org_id,
+                "institution_name": row["org_name"],
+                "role_title": role_title,
+                "relation_type": "role_event",
+                "start_year": start_year,
+                "end_year": end_year,
+                "source_kind": "dataset",
+                "outside_dataset": False,
+                "notes": row.get("norwegian_position_before"),
+                "sources": edge_sources,
+            }
+        )
+
+    for idx, item in enumerate(profile.get("curated_bindings", [])):
+        start_year = item.get("start_year")
+        end_year = item.get("end_year")
+        if not in_year_window(
+            year=None,
+            year_from=year_from,
+            year_to=year_to,
+            start_year=start_year,
+            end_year=end_year,
+        ):
+            continue
+
+        if not matches_query(
+            [
+                person_name,
+                item.get("institution_name"),
+                item.get("role_title"),
+                item.get("relation_type"),
+                item.get("notes"),
+            ],
+            q,
+        ):
+            continue
+
+        institution_name = item.get("institution_name") or "Ukjent institusjon"
+        institution_key = external_recipient_key(institution_name)
+        outside_dataset = bool(item.get("outside_dataset", True))
+        institution_node_id = org_name_to_node_id.get(institution_key)
+
+        if not institution_node_id:
+            if outside_dataset:
+                institution_node_id = f"external-institution:{institution_key}"
+                add_node(
+                    institution_node_id,
+                    institution_name,
+                    "external_institution",
+                    "Utenfor datagrunnlag",
+                )
+            else:
+                institution_node_id = f"curated-organization:{institution_key}"
+                add_node(
+                    institution_node_id,
+                    institution_name,
+                    "organization",
+                    "Kuratert binding",
+                )
+                org_name_to_node_id[institution_key] = institution_node_id
+
+        role_title = item.get("role_title") or "Binding"
+        edge_id = f"curated-binding:{profile_key}:{institution_key}:{idx}"
+        sources = [
+            {
+                "source_name": s.get("source_name"),
+                "url": s.get("url"),
+                "doc_type": s.get("doc_type"),
+                "relation_type": s.get("relation_type"),
+            }
+            for s in item.get("sources", [])
+        ]
+
+        edge_payload = {
+            "id": edge_id,
+            "from": person_node_id,
+            "to": institution_node_id,
+            "type": "curated_binding",
+            "source_kind": "curated",
+            "outside_dataset": outside_dataset,
+            "label": short_label(role_title, limit=32),
+            "title": role_title,
+            "year": start_year,
+            "metadata": {
+                "role_title": role_title,
+                "relation_type": item.get("relation_type"),
+                "institution_type": item.get("institution_type"),
+                "start_year": start_year,
+                "end_year": end_year,
+                "source_kind": "curated",
+                "outside_dataset": outside_dataset,
+                "notes": item.get("notes"),
+            },
+            "sources": sources,
+        }
+        edges.append(edge_payload)
+        bindings.append(
+            {
+                "id": edge_id,
+                "institution_node_id": institution_node_id,
+                "institution_name": institution_name,
+                "role_title": role_title,
+                "relation_type": item.get("relation_type"),
+                "start_year": start_year,
+                "end_year": end_year,
+                "source_kind": "curated",
+                "outside_dataset": outside_dataset,
+                "notes": item.get("notes"),
+                "sources": sources,
+            }
+        )
+
+    connected_node_ids = {person_node_id}
+    connected_node_ids.update(e["from"] for e in edges)
+    connected_node_ids.update(e["to"] for e in edges)
+
+    filtered_nodes = [node for node_id, node in nodes.items() if node_id in connected_node_ids]
+    bindings.sort(
+        key=lambda item: (
+            item["start_year"] is None,
+            -(item["start_year"] or 0),
+            item["institution_name"],
+        )
+    )
+
+    outside_dataset_nodes = {
+        item["institution_node_id"] for item in bindings if item.get("outside_dataset")
+    }
+
+    return JSONResponse(
+        {
+            "person": {
+                "key": profile_key,
+                "display_name": person_name,
+            },
+            "available_profiles": [
+                {
+                    "key": key,
+                    "display_name": data.get("display_name", key),
+                }
+                for key, data in sorted(
+                    PERSON_DRILLDOWN_PROFILES.items(),
+                    key=lambda pair: pair[1].get("display_name", pair[0]),
+                )
+            ],
+            "nodes": filtered_nodes,
+            "edges": edges,
+            "bindings": bindings,
+            "stats": {
+                "nodes": len(filtered_nodes),
+                "edges": len(edges),
+                "dataset_edges": sum(1 for e in edges if e["source_kind"] == "dataset"),
+                "curated_edges": sum(1 for e in edges if e["source_kind"] == "curated"),
+                "outside_dataset_institutions": len(outside_dataset_nodes),
             },
         }
     )
