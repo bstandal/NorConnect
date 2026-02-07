@@ -1,4 +1,4 @@
-.PHONY: up down migrate ingest normalize seed-curated harvest-iati normalize-iati enrich open-data sync sync-init web
+.PHONY: up down migrate ingest normalize seed-curated harvest-iati normalize-iati enrich palestine-orgs open-data sync sync-init web
 
 up:
 	docker compose up -d
@@ -26,6 +26,9 @@ normalize-iati:
 
 enrich:
 	python scripts/enrich_norad_oecd.py
+
+palestine-orgs:
+	python scripts/load_palestine_organizations.py --start-year 1990 --truncate-history
 
 open-data:
 	python scripts/harvest_iati_registry.py

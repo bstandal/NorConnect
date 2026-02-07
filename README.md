@@ -21,6 +21,8 @@ Dette repoet setter opp en MVP-arkitektur for å kartlegge bindinger mellom nors
 - `scripts/harvest_iati_registry.py` - henter IATI XML fra IATI Registry til staging (automatisk norske publiserere).
 - `scripts/normalize_iati_staging.py` - normaliserer IATI-staging til `funding_flow`.
 - `scripts/enrich_norad_oecd.py` - beriker `funding_flow` med Norad API + OECD DAC2A.
+- `scripts/load_palestine_organizations.py` - laster inn og mapper Palestina-relevante mottakerorganisasjoner, og kan backfille Norad partner-historikk fra 1990.
+- `db/whitelists/palestine_norad_partner_whitelist.csv` - streng partner-whitelist for historikkimport (eksakt navneoverlapp mot Palestina-mottakere i IATI).
 - `scripts/sync_neo4j.py` - projiserer normaliserte data til graf.
 - `app/main.py` - lokal webserver/API for graf, tidslinje, topplister og brokoblinger.
 - `app/static/` - frontend (nettverk, tidslinje, topplister, kildepanel).
@@ -49,11 +51,13 @@ Dette repoet setter opp en MVP-arkitektur for å kartlegge bindinger mellom nors
    - `python scripts/normalize_iati_staging.py`
 10. Berik med øvrige offentlige data:
    - `python scripts/enrich_norad_oecd.py`
-11. Opprett constraints i Neo4j:
+11. Last inn og koble Palestina-relevante mottakerorganisasjoner (inkl. historikk):
+   - `python scripts/load_palestine_organizations.py --start-year 1990 --truncate-history`
+12. Opprett constraints i Neo4j:
    - `python scripts/sync_neo4j.py --init-only`
-12. Sync data til graf:
+13. Sync data til graf:
    - `python scripts/sync_neo4j.py`
-13. Start webvisning:
+14. Start webvisning:
    - `uvicorn app.main:app --reload --port 8080`
    - Åpne `http://127.0.0.1:8080`
 
