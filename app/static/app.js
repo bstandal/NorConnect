@@ -2,6 +2,9 @@
 
 const graphEl = document.getElementById("graph");
 const coNetworkEl = document.getElementById("co-network");
+const udPalNetworkEl = document.getElementById("ud-pal-network");
+const udPalSummaryEl = document.getElementById("ud-pal-summary");
+const udPalTransactionsEl = document.getElementById("ud-pal-transactions");
 const personGraphEl = document.getElementById("person-graph");
 const personKeyEl = document.getElementById("person-key");
 const personBindingsEl = document.getElementById("person-bindings");
@@ -23,6 +26,7 @@ const viewPanes = {
   timeline: document.getElementById("view-timeline"),
   toplists: document.getElementById("view-toplists"),
   coboard: document.getElementById("view-coboard"),
+  udpal: document.getElementById("view-udpal"),
 };
 
 const timelineRolesCanvas = document.getElementById("timeline-roles");
@@ -32,10 +36,12 @@ const topPersonRolesCanvas = document.getElementById("top-person-roles");
 
 let network;
 let coNetwork;
+let udPalNetwork;
 let personNetwork;
 let activeView = "graph";
 let currentGraph = { nodes: [], edges: [] };
 let currentCoBoard = { nodes: [], edges: [] };
+let currentUdPal = { nodes: [], edges: [], top_recipients: [], latest_transactions: [], stats: {} };
 let currentPersonDrilldown = { nodes: [], edges: [], bindings: [], person: null };
 
 let timelineRolesChart;
@@ -141,6 +147,9 @@ function setActiveView(view) {
   if (view === "coboard" && coNetwork) {
     coNetwork.redraw();
   }
+  if (view === "udpal" && udPalNetwork) {
+    udPalNetwork.redraw();
+  }
 }
 
 async function showEdgeDetails(edgeId) {
@@ -210,6 +219,42 @@ function showCoBoardEdgeDetails(edgeId) {
     </div>
     <p>Delte personer:</p>
     <ul>${persons || "<li>Ingen navn tilgjengelig</li>"}</ul>
+  `;
+}
+
+function showUdPalNodeDetails(nodeId) {
+  const node = currentUdPal.nodes.find((n) => n.id === nodeId);
+  if (!node) {
+    return;
+  }
+  const edgeCount = currentUdPal.edges.filter((e) => e.from === nodeId || e.to === nodeId).length;
+  detailsEl.innerHTML = `
+    <h2>Kildepanel</h2>
+    <h3>${escapeHtml(node.label || "Node")}</h3>
+    <p>${escapeHtml(node.subtitle || node.type || "")}</p>
+    <div class="meta-grid">
+      <div class="meta-item"><b>type</b><span>${escapeHtml(node.type || "")}</span></div>
+      <div class="meta-item"><b>relasjoner</b><span>${edgeCount}</span></div>
+    </div>
+    <p>Klikk en funding- eller rollekant for dokumenterte kilder.</p>
+  `;
+}
+
+function showUdPalEdgeDetails(edgeId) {
+  if (edgeId.startsWith("funding:") || edgeId.startsWith("role:")) {
+    showEdgeDetails(edgeId);
+    return;
+  }
+
+  const edge = currentUdPal.edges.find((e) => e.id === edgeId);
+  if (!edge) {
+    return;
+  }
+  detailsEl.innerHTML = `
+    <h2>Kildepanel</h2>
+    <h3>${escapeHtml(edge.title || edge.label || "Relasjon")}</h3>
+    ${metadataGrid(edge.metadata || {})}
+    <p>Denne kanten har ikke direkte edge-detaljer i databasen.</p>
   `;
 }
 
@@ -501,6 +546,75 @@ function renderPersonDrilldown(payload) {
   }
 }
 
+function udPalNodeStyle(node) {
+  if (node.type === "ud_source") {
+    return {
+      shape: "diamond",
+      size: 22,
+      color: {
+        background: "#86dbc4",
+        border: "#1f7b67",
+      },
+      font: { color: "#17453b", size: 13, face: "Space Grotesk" },
+    };
+  }
+
+  if (node.type === "person") {
+    return {
+      shape: "dot",
+      size: 14,
+      color: {
+        background: "#b7d4ff",
+        border: "#4f74bf",
+      },
+      font: { color: "#243961", size: 12, face: "Space Grotesk" },
+    };
+  }
+
+  if (node.type === "organization") {
+    return {
+      shape: "box",
+      borderWidth: 1,
+      margin: 8,
+      color: {
+        background: "#fff4e7",
+        border: "#c86e2f",
+      },
+      font: { color: "#4d2d16", size: 12, face: "Space Grotesk" },
+    };
+  }
+
+  return {
+    shape: "ellipse",
+    borderWidth: 1,
+    color: {
+      background: "#fde8df",
+      border: "#ca6a2a",
+    },
+    font: { color: "#4f2711", size: 12, face: "Space Grotesk" },
+  };
+}
+
+function udPalEdgeStyle(edge) {
+  if (edge.type === "role") {
+    return {
+      color: { color: "#1e7e6f", highlight: "#145b4f" },
+      width: 2,
+      dashes: false,
+      arrows: { to: { enabled: true, scaleFactor: 0.55 } },
+      font: { align: "middle", size: 10, face: "IBM Plex Mono", color: "#1d4a42" },
+    };
+  }
+
+  return {
+    color: { color: "#c4682b", highlight: "#934717" },
+    width: 1.8,
+    dashes: false,
+    arrows: { to: { enabled: true, scaleFactor: 0.6 } },
+    font: { align: "middle", size: 10, face: "IBM Plex Mono", color: "#683616" },
+  };
+}
+
 function nodeStyle(node) {
   if (node.type === "person") {
     return {
@@ -679,6 +793,118 @@ function renderCoBoard(payload) {
     });
   } else {
     coNetwork.setData(data);
+  }
+}
+
+function renderUdPalSide(payload) {
+  if (udPalSummaryEl) {
+    const stats = payload.stats || {};
+    const topRecipients = payload.top_recipients || [];
+    const recipientsHtml = topRecipients
+      .slice(0, 8)
+      .map(
+        (recipient) => `
+        <li>
+          <b>${escapeHtml(recipient.recipient_name || "Ukjent mottaker")}</b>
+          <span>${recipient.flow_count || 0} flows · ${escapeHtml(recipient.amount_label || "?")}</span>
+        </li>
+      `,
+      )
+      .join("\n");
+
+    udPalSummaryEl.innerHTML = `
+      <div class="udpal-metrics">
+        <div class="meta-item"><b>Funding edges</b><span>${stats.funding_edges || 0}</span></div>
+        <div class="meta-item"><b>Mottakere</b><span>${stats.recipients || 0}</span></div>
+        <div class="meta-item"><b>Personer</b><span>${stats.people || 0}</span></div>
+        <div class="meta-item"><b>Sum NOK</b><span>${escapeHtml(stats.amount_nok_label || "?")}</span></div>
+      </div>
+      <p class="udpal-range">Periode: ${escapeHtml(stats.first_tx || "?")} til ${escapeHtml(stats.last_tx || "?")}</p>
+      <ul class="udpal-list">${recipientsHtml || "<li>Ingen mottakere i valgt filter.</li>"}</ul>
+    `;
+  }
+
+  if (udPalTransactionsEl) {
+    const rows = payload.latest_transactions || [];
+    const txHtml = rows
+      .slice(0, 14)
+      .map(
+        (row) => `
+        <button class="udpal-tx-item" data-edge-id="funding:${row.funding_id}">
+          <b>${escapeHtml(row.transaction_date || row.fiscal_year || "ukjent dato")}</b>
+          <span>${escapeHtml(row.recipient_name || "Ukjent mottaker")}</span>
+          <span>${escapeHtml(row.amount_label || "?")}</span>
+        </button>
+      `,
+      )
+      .join("\n");
+
+    udPalTransactionsEl.innerHTML = txHtml || "<p>Ingen transaksjoner i valgt filter.</p>";
+    udPalTransactionsEl.querySelectorAll("[data-edge-id]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const edgeId = el.getAttribute("data-edge-id");
+        if (edgeId) {
+          showEdgeDetails(edgeId);
+        }
+      });
+    });
+  }
+}
+
+function renderUdPal(payload) {
+  currentUdPal = payload;
+  renderUdPalSide(payload);
+
+  if (!udPalNetworkEl) {
+    return;
+  }
+
+  const nodes = new vis.DataSet(
+    (payload.nodes || []).map((node) => ({
+      ...node,
+      ...udPalNodeStyle(node),
+    })),
+  );
+  const edges = new vis.DataSet(
+    (payload.edges || []).map((edge) => ({
+      ...edge,
+      ...udPalEdgeStyle(edge),
+    })),
+  );
+
+  const data = { nodes, edges };
+  const options = {
+    autoResize: true,
+    interaction: {
+      hover: true,
+      navigationButtons: true,
+    },
+    physics: {
+      stabilization: { iterations: 240, fit: true },
+      barnesHut: {
+        gravitationalConstant: -5200,
+        centralGravity: 0.16,
+        springLength: 140,
+        springConstant: 0.05,
+        damping: 0.3,
+      },
+    },
+  };
+
+  if (!udPalNetwork) {
+    udPalNetwork = new vis.Network(udPalNetworkEl, data, options);
+    udPalNetwork.on("selectEdge", (params) => {
+      if (params.edges && params.edges.length > 0) {
+        showUdPalEdgeDetails(params.edges[0]);
+      }
+    });
+    udPalNetwork.on("selectNode", (params) => {
+      if (params.nodes && params.nodes.length > 0) {
+        showUdPalNodeDetails(params.nodes[0]);
+      }
+    });
+  } else {
+    udPalNetwork.setData(data);
   }
 }
 
@@ -866,7 +1092,7 @@ function renderToplists(payload) {
   `;
 }
 
-function updateStats(graphStats, timelinePayload, coboardStats, personStats) {
+function updateStats(graphStats, timelinePayload, coboardStats, personStats, udPalStats) {
   const s = graphStats || {};
   const years = (timelinePayload && timelinePayload.years ? timelinePayload.years.length : 0) || 0;
   const coboardEdges = (coboardStats && coboardStats.edges) || 0;
@@ -875,12 +1101,14 @@ function updateStats(graphStats, timelinePayload, coboardStats, personStats) {
   const people = (personStats && personStats.people) || 0;
   const outsideInstitutions =
     (personStats && personStats.outside_dataset_institutions) || 0;
+  const udPalFunding = (udPalStats && udPalStats.funding_edges) || 0;
+  const udPalRecipients = (udPalStats && udPalStats.recipients) || 0;
   const fundingText = s.funding_edges_truncated
     ? `${s.funding_edges || 0}/${s.funding_edges_total_matched || 0}`
     : `${s.funding_edges || 0}`;
   statsEl.textContent = `noder=${s.nodes || 0} | kanter=${s.edges || 0} | roller=${
     s.role_edges || 0
-  } | funding=${fundingText} | år=${years} | co-board=${coboardEdges} | drilldown=${personEdges} | personer=${people} | delte=${personSharedEdges} | ekst-inst=${outsideInstitutions}`;
+  } | funding=${fundingText} | år=${years} | co-board=${coboardEdges} | drilldown=${personEdges} | personer=${people} | delte=${personSharedEdges} | ekst-inst=${outsideInstitutions} | udps-flow=${udPalFunding} | udps-mott=${udPalRecipients}`;
 }
 
 async function fetchJson(url) {
@@ -906,13 +1134,14 @@ async function loadAllViews() {
   }
 
   try {
-    const [graphPayload, personPayload, timelinePayload, toplistsPayload, coboardPayload] =
+    const [graphPayload, personPayload, timelinePayload, toplistsPayload, coboardPayload, udPalPayload] =
       await Promise.all([
         fetchJson(`/api/graph?${params.toString()}`),
         fetchJson(`/api/person-drilldown?${personParams.toString()}`),
         fetchJson(`/api/timeline?${timelineParams.toString()}`),
         fetchJson(`/api/toplists?${timelineParams.toString()}`),
         fetchJson(`/api/coboard?${timelineParams.toString()}`),
+        fetchJson(`/api/ud-palestina?${timelineParams.toString()}`),
       ]);
 
     renderGraph(graphPayload);
@@ -920,7 +1149,14 @@ async function loadAllViews() {
     renderTimeline(timelinePayload);
     renderToplists(toplistsPayload);
     renderCoBoard(coboardPayload);
-    updateStats(graphPayload.stats, timelinePayload, coboardPayload.stats, personPayload.stats);
+    renderUdPal(udPalPayload);
+    updateStats(
+      graphPayload.stats,
+      timelinePayload,
+      coboardPayload.stats,
+      personPayload.stats,
+      udPalPayload.stats,
+    );
 
     if (activeView === "timeline") {
       detailsEl.innerHTML = `
@@ -932,6 +1168,12 @@ async function loadAllViews() {
       detailsEl.innerHTML = `
         <h2>Kildepanel</h2>
         <p>Person-drilldown er klar. Klikk bindinger i grafen eller listen for kilder.</p>
+      `;
+    }
+    if (activeView === "udpal") {
+      detailsEl.innerHTML = `
+        <h2>Kildepanel</h2>
+        <p>UD-Palestina er lastet. Klikk funding- eller rollekant for kilder.</p>
       `;
     }
   } catch (err) {

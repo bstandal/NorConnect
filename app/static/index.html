@@ -61,6 +61,7 @@
           <button class="view-btn" data-view="timeline">Tidslinje</button>
           <button class="view-btn" data-view="toplists">Topplister</button>
           <button class="view-btn" data-view="coboard">Brokoblinger</button>
+          <button class="view-btn" data-view="udpal">UD-Palestina</button>
         </div>
 
         <div class="view-pane active" id="view-graph">
@@ -111,6 +112,24 @@
 
         <div class="view-pane" id="view-coboard">
           <div id="co-network"></div>
+        </div>
+
+        <div class="view-pane" id="view-udpal">
+          <div class="udpal-grid">
+            <div class="udpal-graph-wrap">
+              <div id="ud-pal-network"></div>
+            </div>
+            <div class="udpal-side">
+              <section class="udpal-card">
+                <h3>UD-Palestina oversikt</h3>
+                <div id="ud-pal-summary"></div>
+              </section>
+              <section class="udpal-card">
+                <h3>Siste transaksjoner</h3>
+                <div id="ud-pal-transactions"></div>
+              </section>
+            </div>
+          </div>
         </div>
       </section>
 

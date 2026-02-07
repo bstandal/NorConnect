@@ -205,7 +205,8 @@ body {
 }
 
 #graph,
-#co-network {
+#co-network,
+#ud-pal-network {
   width: 100%;
   height: 100%;
 }
@@ -259,6 +260,128 @@ body {
   width: 100%;
   height: 100%;
   min-height: 460px;
+}
+
+#view-udpal {
+  height: 100%;
+  display: none;
+}
+
+#view-udpal.active {
+  display: block;
+}
+
+.udpal-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(290px, 1fr);
+  gap: 10px;
+  padding: 10px;
+  height: 100%;
+}
+
+.udpal-graph-wrap {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  min-height: 0;
+}
+
+#ud-pal-network {
+  min-height: 500px;
+}
+
+.udpal-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.udpal-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  min-height: 0;
+}
+
+.udpal-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: #2f4e47;
+}
+
+.udpal-metrics {
+  display: grid;
+  gap: 8px;
+}
+
+.udpal-range {
+  margin: 8px 0;
+  color: #46615b;
+  font-size: 12px;
+}
+
+.udpal-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.udpal-list li {
+  font-size: 12px;
+  color: #2a4540;
+}
+
+.udpal-list li b {
+  display: block;
+  font-size: 13px;
+}
+
+.udpal-list li span {
+  font-family: "IBM Plex Mono", monospace;
+  color: #395651;
+  font-size: 11px;
+}
+
+#ud-pal-transactions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.udpal-tx-item {
+  border: 1px solid #d5e1dc;
+  border-radius: 10px;
+  background: #f9fcfb;
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  display: grid;
+  gap: 3px;
+}
+
+.udpal-tx-item:hover {
+  border-color: #9ac7bb;
+  background: #f0faf7;
+}
+
+.udpal-tx-item b {
+  font-size: 12px;
+  color: #274a43;
+}
+
+.udpal-tx-item span {
+  font-size: 12px;
+  color: #3f5d55;
 }
 
 .person-bindings {
@@ -483,7 +606,16 @@ body {
     height: auto;
   }
 
+  .udpal-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
   #person-graph {
+    min-height: 54vh;
+  }
+
+  #ud-pal-network {
     min-height: 54vh;
   }
 }
@@ -508,7 +640,8 @@ body {
   }
 
   #graph,
-  #co-network {
+  #co-network,
+  #ud-pal-network {
     min-height: 58vh;
   }
 }

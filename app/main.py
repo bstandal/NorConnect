@@ -860,6 +860,53 @@ def filter_funding_rows(
     return out
 
 
+def fetch_ud_palestina_flow_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+          f.id,
+          f.funding_channel,
+          f.amount_nok,
+          f.amount_original,
+          f.currency_code,
+          f.fiscal_year,
+          f.period_start,
+          f.period_end,
+          f.notes,
+          f.donor_organization_id,
+          donor.canonical_name AS donor_org_name,
+          f.recipient_organization_id,
+          recipient.canonical_name AS recipient_org_name,
+          f.recipient_name_raw,
+          st.transaction_date,
+          st.activity_title,
+          st.provider_org_name,
+          st.receiver_org_name
+        FROM funding_flow f
+        JOIN funding_flow_ingest_key fik
+          ON fik.funding_flow_id = f.id
+         AND fik.source_system = 'iati_registry'
+        JOIN stg_iati_transaction st
+          ON st.event_key = fik.event_key
+        LEFT JOIN organization donor ON donor.id = f.donor_organization_id
+        LEFT JOIN organization recipient ON recipient.id = f.recipient_organization_id
+        WHERE (
+          st.recipient_country_code = 'PS'
+          OR lower(coalesce(st.activity_title, '')) LIKE '%palestin%'
+          OR lower(coalesce(st.receiver_org_name, '')) LIKE '%palestin%'
+          OR lower(coalesce(st.provider_org_name, '')) LIKE '%palestin%'
+        )
+          AND (
+            donor.canonical_name = 'Utenriksdepartementet'
+            OR st.provider_org_name = 'Norwegian Ministry of Foreign Affairs'
+            OR st.provider_org_name = 'Norwegian Ministry of Foreign Affairs - Embassies'
+          )
+        ORDER BY COALESCE(st.transaction_date, f.period_start, f.period_end) DESC NULLS LAST, f.id DESC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -1243,6 +1290,264 @@ def coboard(
                 "edges": len(edges),
                 "max_shared": max((e["shared_count"] for e in edges), default=0),
             },
+        }
+    )
+
+
+@app.get("/api/ud-palestina")
+def ud_palestina(
+    q: str | None = Query(default=None),
+    year_from: int | None = Query(default=None),
+    year_to: int | None = Query(default=None),
+    max_funding_edges: int = Query(default=1200, ge=50, le=10000),
+) -> JSONResponse:
+    dsn = get_dsn()
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        funding_rows = fetch_ud_palestina_flow_rows(conn)
+        role_rows = fetch_role_rows(conn)
+        ud_row = conn.execute(
+            """
+            SELECT id, canonical_name
+            FROM organization
+            WHERE canonical_name = 'Utenriksdepartementet'
+            LIMIT 1
+            """
+        ).fetchone()
+
+    ud_org_id = int(ud_row["id"]) if ud_row else None
+    ud_name = ud_row["canonical_name"] if ud_row else "Utenriksdepartementet"
+    ud_node_id = f"org:{ud_org_id}" if ud_org_id is not None else "ud:source"
+
+    filtered_funding: list[dict[str, Any]] = []
+    for row in funding_rows:
+        tx_year = row["transaction_date"].year if row.get("transaction_date") else None
+        fiscal_year = row.get("fiscal_year") or tx_year
+        period_start_year = row["period_start"].year if row.get("period_start") else None
+        period_end_year = row["period_end"].year if row.get("period_end") else None
+
+        if not in_year_window(
+            year=fiscal_year,
+            year_from=year_from,
+            year_to=year_to,
+            start_year=period_start_year,
+            end_year=period_end_year,
+        ):
+            continue
+
+        recipient_name = (
+            row.get("recipient_org_name")
+            or row.get("recipient_name_raw")
+            or row.get("receiver_org_name")
+            or "Ukjent mottaker"
+        )
+        if not matches_query(
+            [
+                ud_name,
+                recipient_name,
+                row.get("funding_channel"),
+                row.get("activity_title"),
+                row.get("provider_org_name"),
+                row.get("receiver_org_name"),
+            ],
+            q,
+        ):
+            continue
+
+        row_copy = dict(row)
+        row_copy["recipient_name"] = recipient_name
+        row_copy["event_year"] = fiscal_year
+        filtered_funding.append(row_copy)
+
+    nodes: dict[str, dict[str, Any]] = {
+        ud_node_id: {
+            "id": ud_node_id,
+            "label": ud_name,
+            "type": "ud_source",
+            "subtitle": "Donor",
+        }
+    }
+    edges: list[dict[str, Any]] = []
+
+    funding_edges_total = len(filtered_funding)
+    funding_edges_added = 0
+    recipient_stats: dict[str, dict[str, Any]] = {}
+    recipient_org_ids: set[int] = set()
+    total_nok = 0.0
+
+    for row in filtered_funding:
+        recipient_org_id = row.get("recipient_organization_id")
+        recipient_name = row["recipient_name"]
+        if recipient_org_id is not None:
+            recipient_node_id = f"org:{recipient_org_id}"
+            recipient_type = "organization"
+            recipient_org_ids.add(int(recipient_org_id))
+        else:
+            recipient_node_id = f"udpal-recipient:{external_recipient_key(recipient_name)}"
+            recipient_type = "external_recipient"
+
+        if recipient_node_id not in nodes:
+            nodes[recipient_node_id] = {
+                "id": recipient_node_id,
+                "label": recipient_name,
+                "type": recipient_type,
+                "subtitle": "Mottaker",
+            }
+
+        amount_for_label, label_currency, amount_nok, amount_original = funding_amount_fields(row)
+        if amount_nok is not None:
+            total_nok += amount_nok
+
+        recipient_bucket = recipient_stats.setdefault(
+            recipient_node_id,
+            {
+                "recipient_name": recipient_name,
+                "flow_count": 0,
+                "nok_total": 0.0,
+                "usd_total": 0.0,
+            },
+        )
+        recipient_bucket["flow_count"] += 1
+        if amount_nok is not None:
+            recipient_bucket["nok_total"] += amount_nok
+        elif amount_original is not None and (row.get("currency_code") or "").upper() == "USD":
+            recipient_bucket["usd_total"] += amount_original
+
+        if funding_edges_added >= max_funding_edges:
+            continue
+
+        edges.append(
+            {
+                "id": f"funding:{row['id']}",
+                "from": ud_node_id,
+                "to": recipient_node_id,
+                "type": "funding",
+                "label": format_amount(amount_for_label, label_currency),
+                "title": row.get("activity_title") or row.get("funding_channel") or "Funding",
+                "year": row.get("event_year"),
+                "metadata": {
+                    "funding_channel": row.get("funding_channel"),
+                    "transaction_date": (
+                        str(row["transaction_date"]) if row.get("transaction_date") else None
+                    ),
+                    "provider_org_name": row.get("provider_org_name"),
+                    "receiver_org_name": row.get("receiver_org_name"),
+                },
+            }
+        )
+        funding_edges_added += 1
+
+    role_org_ids = set(recipient_org_ids)
+    if ud_org_id is not None:
+        role_org_ids.add(ud_org_id)
+
+    people_in_scope: set[int] = set()
+    for row in role_rows:
+        org_id = int(row["org_id"])
+        if org_id not in role_org_ids:
+            continue
+
+        start_year, end_year, anchor_year = role_year_bounds(row)
+        if not in_year_window(
+            year=None,
+            year_from=year_from,
+            year_to=year_to,
+            start_year=anchor_year,
+            end_year=end_year,
+        ):
+            continue
+
+        person_node_id = f"person:{row['person_id']}"
+        org_node_id = f"org:{row['org_id']}"
+        people_in_scope.add(int(row["person_id"]))
+
+        if person_node_id not in nodes:
+            nodes[person_node_id] = {
+                "id": person_node_id,
+                "label": row["person_name"],
+                "type": "person",
+                "subtitle": "Rollekobling",
+            }
+
+        if org_node_id not in nodes:
+            nodes[org_node_id] = {
+                "id": org_node_id,
+                "label": row["org_name"],
+                "type": "organization",
+                "subtitle": "Mottaker/aktør",
+            }
+
+        edges.append(
+            {
+                "id": f"role:{row['id']}",
+                "from": person_node_id,
+                "to": org_node_id,
+                "type": "role",
+                "label": short_label(row["role_title"]),
+                "title": row["role_title"],
+                "year": anchor_year,
+            }
+        )
+
+    top_recipients = sorted(
+        recipient_stats.values(),
+        key=lambda x: (x["nok_total"], x["flow_count"], x["usd_total"]),
+        reverse=True,
+    )
+    for bucket in top_recipients:
+        if bucket["nok_total"] > 0:
+            bucket["amount_label"] = format_amount(bucket["nok_total"], "NOK")
+        elif bucket["usd_total"] > 0:
+            bucket["amount_label"] = format_amount(bucket["usd_total"], "USD")
+        else:
+            bucket["amount_label"] = "?"
+
+    latest_transactions = []
+    for row in filtered_funding[:20]:
+        amount_for_label, label_currency, _, _ = funding_amount_fields(row)
+        latest_transactions.append(
+            {
+                "funding_id": int(row["id"]),
+                "transaction_date": str(row["transaction_date"]) if row.get("transaction_date") else None,
+                "fiscal_year": row.get("event_year"),
+                "recipient_name": row.get("recipient_name"),
+                "amount_label": format_amount(amount_for_label, label_currency),
+                "activity_title": row.get("activity_title"),
+            }
+        )
+
+    connected_node_ids = {edge["from"] for edge in edges} | {edge["to"] for edge in edges}
+    filtered_nodes = [node for node_id, node in nodes.items() if node_id in connected_node_ids]
+
+    first_tx = (
+        min((row["transaction_date"] for row in filtered_funding if row.get("transaction_date")), default=None)
+    )
+    last_tx = (
+        max((row["transaction_date"] for row in filtered_funding if row.get("transaction_date")), default=None)
+    )
+
+    stats = {
+        "nodes": len(filtered_nodes),
+        "edges": len(edges),
+        "funding_edges": sum(1 for edge in edges if edge["type"] == "funding"),
+        "role_edges": sum(1 for edge in edges if edge["type"] == "role"),
+        "funding_edges_total_matched": funding_edges_total,
+        "funding_edges_truncated": funding_edges_total > max_funding_edges,
+        "recipients": len(recipient_stats),
+        "people": len(people_in_scope),
+        "first_tx": str(first_tx) if first_tx else None,
+        "last_tx": str(last_tx) if last_tx else None,
+        "amount_nok_total": round(total_nok, 2),
+        "amount_nok_label": format_amount(total_nok, "NOK"),
+    }
+
+    return JSONResponse(
+        {
+            "nodes": filtered_nodes,
+            "edges": edges,
+            "top_recipients": top_recipients[:15],
+            "latest_transactions": latest_transactions,
+            "stats": stats,
         }
     )
 
