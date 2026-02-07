@@ -230,6 +230,18 @@ function nodeStyle(node) {
     };
   }
 
+  if (node.type === "external_recipient") {
+    return {
+      shape: "ellipse",
+      borderWidth: 1,
+      color: {
+        background: "#fde8df",
+        border: "#ca6a2a",
+      },
+      font: { color: "#4f2711", size: 12, face: "Space Grotesk" },
+    };
+  }
+
   return {
     shape: "diamond",
     size: 18,
@@ -561,9 +573,12 @@ function updateStats(graphStats, timelinePayload, coboardStats) {
   const s = graphStats || {};
   const years = (timelinePayload && timelinePayload.years ? timelinePayload.years.length : 0) || 0;
   const coboardEdges = (coboardStats && coboardStats.edges) || 0;
+  const fundingText = s.funding_edges_truncated
+    ? `${s.funding_edges || 0}/${s.funding_edges_total_matched || 0}`
+    : `${s.funding_edges || 0}`;
   statsEl.textContent = `noder=${s.nodes || 0} | kanter=${s.edges || 0} | roller=${
     s.role_edges || 0
-  } | funding=${s.funding_edges || 0} | år=${years} | co-board=${coboardEdges}`;
+  } | funding=${fundingText} | år=${years} | co-board=${coboardEdges}`;
 }
 
 async function fetchJson(url) {

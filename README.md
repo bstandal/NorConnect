@@ -18,6 +18,8 @@ Dette repoet setter opp en MVP-arkitektur for å kartlegge bindinger mellom nors
 - `scripts/run_migrations.py` - enkel migrasjonsrunner.
 - `scripts/ingest_excel.py` - ingest til staging-tabeller.
 - `scripts/normalize_staging.py` - normalisering fra staging til kjerne-tabeller.
+- `scripts/harvest_iati_registry.py` - henter IATI XML fra IATI Registry til staging (automatisk norske publiserere).
+- `scripts/normalize_iati_staging.py` - normaliserer IATI-staging til `funding_flow`.
 - `scripts/enrich_norad_oecd.py` - beriker `funding_flow` med Norad API + OECD DAC2A.
 - `scripts/sync_neo4j.py` - projiserer normaliserte data til graf.
 - `app/main.py` - lokal webserver/API for graf, tidslinje, topplister og brokoblinger.
@@ -38,15 +40,24 @@ Dette repoet setter opp en MVP-arkitektur for å kartlegge bindinger mellom nors
    - `python scripts/ingest_excel.py --file "$EXCEL_PATH"`
 6. Normaliser staging til kjerne-tabeller:
    - `python scripts/normalize_staging.py --truncate-core`
-7. Berik med offentlige data:
+7. Høst åpne IATI-data (norske publiserere i registry):
+   - `python scripts/harvest_iati_registry.py`
+   - Begrenset test: `python scripts/harvest_iati_registry.py --max-resources 1 --max-activities 200`
+8. Normaliser IATI-staging til kjerne-tabeller:
+   - `python scripts/normalize_iati_staging.py`
+9. Berik med øvrige offentlige data:
    - `python scripts/enrich_norad_oecd.py`
-8. Opprett constraints i Neo4j:
+10. Opprett constraints i Neo4j:
    - `python scripts/sync_neo4j.py --init-only`
-9. Sync data til graf:
+11. Sync data til graf:
    - `python scripts/sync_neo4j.py`
-10. Start webvisning:
+12. Start webvisning:
    - `uvicorn app.main:app --reload --port 8080`
    - Åpne `http://127.0.0.1:8080`
+
+Alternativt: kjør åpen-kilde-pipeline i ett:
+- `make open-data`
+- (`enrich` krever i tillegg `NORAD_X_FUNCTIONS_KEY`)
 
 ## Datamodell (første versjon)
 Kjerneentiteter i Postgres:
@@ -65,6 +76,10 @@ Kildebevis/junction-tabeller:
 Staging for råimport:
 - `stg_excel_organisasjoner`
 - `stg_excel_datakilder`
+- `stg_iati_transaction`
+
+Idempotens for maskinell import:
+- `funding_flow_ingest_key` (source_system + event_key)
 
 ## Neste steg
 - Bygg `entity_resolution`-pipeline (alias + deduplisering).

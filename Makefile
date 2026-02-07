@@ -1,4 +1,4 @@
-.PHONY: up down migrate ingest normalize enrich sync sync-init web
+.PHONY: up down migrate ingest normalize harvest-iati normalize-iati enrich open-data sync sync-init web
 
 up:
 	docker compose up -d
@@ -15,8 +15,18 @@ ingest:
 normalize:
 	python scripts/normalize_staging.py --truncate-core
 
+harvest-iati:
+	python scripts/harvest_iati_registry.py
+
+normalize-iati:
+	python scripts/normalize_iati_staging.py
+
 enrich:
 	python scripts/enrich_norad_oecd.py
+
+open-data:
+	python scripts/harvest_iati_registry.py
+	python scripts/normalize_iati_staging.py
 
 sync-init:
 	python scripts/sync_neo4j.py --init-only

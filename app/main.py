@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
@@ -41,6 +42,12 @@ def short_label(text: str, limit: int = 28) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+def external_recipient_key(name: str) -> str:
+    key = re.sub(r"\s+", " ", name.strip().lower())
+    key = re.sub(r"[^a-z0-9æøå ]", "", key)
+    return key or "unknown"
 
 
 def format_amount(amount: float | None, currency: str | None) -> str:
@@ -161,10 +168,11 @@ def fetch_funding_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
           f.period_start,
           f.period_end,
           f.notes,
+          f.recipient_name_raw,
           o.id AS org_id,
           o.canonical_name AS org_name
         FROM funding_flow f
-        JOIN organization o ON o.id = f.recipient_organization_id
+        LEFT JOIN organization o ON o.id = f.recipient_organization_id
         ORDER BY f.id
         """
     ).fetchall()
@@ -221,7 +229,10 @@ def filter_funding_rows(
         ):
             continue
 
-        if not matches_query([row["org_name"], row["funding_channel"]], q):
+        if not matches_query(
+            [row["org_name"], row["recipient_name_raw"], row["funding_channel"]],
+            q,
+        ):
             continue
 
         out.append(dict(row))
@@ -245,6 +256,7 @@ def graph(
     year_to: int | None = Query(default=None),
     include_roles: bool = Query(default=True),
     include_funding: bool = Query(default=True),
+    max_funding_edges: int = Query(default=5000, ge=1, le=100000),
 ) -> JSONResponse:
     dsn = get_dsn()
     nodes: dict[str, dict[str, Any]] = {}
@@ -297,22 +309,35 @@ def graph(
         donor_id = "country:NO"
         add_node(donor_id, "Norge", "country", "Donor")
 
+        funding_edges_added = 0
+        funding_edges_total = 0
         for row in funding_rows:
-            org_id = f"org:{row['org_id']}"
-            add_node(org_id, row["org_name"], "organization")
+            funding_edges_total += 1
+            if funding_edges_added >= max_funding_edges:
+                continue
+
+            recipient_name = row["org_name"] or row["recipient_name_raw"] or "Ukjent mottaker"
+            if row["org_id"] is not None:
+                recipient_id = f"org:{row['org_id']}"
+                recipient_type = "organization"
+            else:
+                recipient_id = f"external:{external_recipient_key(recipient_name)}"
+                recipient_type = "external_recipient"
+            add_node(recipient_id, recipient_name, recipient_type)
 
             amount_for_label, label_currency, _, _ = funding_amount_fields(row)
             edges.append(
                 {
                     "id": f"funding:{row['id']}",
                     "from": donor_id,
-                    "to": org_id,
+                    "to": recipient_id,
                     "type": "funding",
                     "label": format_amount(amount_for_label, label_currency),
                     "title": row["funding_channel"] or "Funding",
                     "year": row["fiscal_year"],
                 }
             )
+            funding_edges_added += 1
 
     connected = {e["from"] for e in edges} | {e["to"] for e in edges}
     filtered_nodes = [n for nid, n in nodes.items() if nid in connected]
@@ -322,6 +347,10 @@ def graph(
         "edges": len(edges),
         "role_edges": sum(1 for e in edges if e["type"] == "role"),
         "funding_edges": sum(1 for e in edges if e["type"] == "funding"),
+        "funding_edges_total_matched": funding_edges_total if include_funding else 0,
+        "funding_edges_truncated": (
+            include_funding and funding_edges_total > max_funding_edges
+        ),
     }
 
     return JSONResponse({"nodes": filtered_nodes, "edges": edges, "stats": stats})
@@ -399,7 +428,7 @@ def toplists(
 ) -> JSONResponse:
     dsn = get_dsn()
 
-    org_funding: dict[int, dict[str, Any]] = {}
+    org_funding: dict[str, dict[str, Any]] = {}
     org_roles: dict[int, dict[str, Any]] = {}
     person_roles: dict[int, dict[str, Any]] = {}
 
@@ -418,11 +447,15 @@ def toplists(
         )
 
     for row in funding_rows:
-        org_id = int(row["org_id"])
+        recipient_name = row["org_name"] or row["recipient_name_raw"] or "Ukjent mottaker"
+        if row["org_id"] is not None:
+            org_id = f"org:{row['org_id']}"
+        else:
+            org_id = f"external:{external_recipient_key(recipient_name)}"
         bucket = org_funding.setdefault(
             org_id,
             {
-                "org_name": row["org_name"],
+                "org_name": recipient_name,
                 "nok_total": 0.0,
                 "usd_total": 0.0,
                 "flow_count": 0,
@@ -681,9 +714,10 @@ def edge_details(edge_id: str) -> JSONResponse:
                   f.period_start,
                   f.period_end,
                   f.notes,
+                  f.recipient_name_raw,
                   o.canonical_name AS org_name
                 FROM funding_flow f
-                JOIN organization o ON o.id = f.recipient_organization_id
+                LEFT JOIN organization o ON o.id = f.recipient_organization_id
                 WHERE f.id = %s
                 """,
                 (row_id,),
@@ -716,7 +750,7 @@ def edge_details(edge_id: str) -> JSONResponse:
                 "edge_id": edge_id,
                 "kind": "funding",
                 "title": row["funding_channel"] or "Funding",
-                "summary": f"Norge -> {row['org_name']}",
+                "summary": f"Norge -> {row['org_name'] or row['recipient_name_raw']}",
                 "metadata": {
                     "amount": format_amount(amount, currency),
                     "currency": currency,
