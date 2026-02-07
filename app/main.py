@@ -650,6 +650,29 @@ def fetch_person_role_rows(conn: psycopg.Connection, aliases: list[str]) -> list
     return [dict(r) for r in rows]
 
 
+def fetch_person_row_by_aliases(
+    conn: psycopg.Connection,
+    aliases: list[str],
+) -> dict[str, Any] | None:
+    normalized_aliases = sorted({a.strip().lower() for a in aliases if a and a.strip()})
+    if not normalized_aliases:
+        return None
+
+    row = conn.execute(
+        """
+        SELECT id, canonical_name
+        FROM person
+        WHERE lower(canonical_name) = ANY(%s)
+        ORDER BY id
+        LIMIT 1
+        """,
+        (normalized_aliases,),
+    ).fetchone()
+    if not row:
+        return None
+    return dict(row)
+
+
 def fetch_role_sources(
     conn: psycopg.Connection,
     role_event_ids: list[int],
@@ -678,6 +701,71 @@ def fetch_role_sources(
     for row in rows:
         role_id = int(row["role_event_id"])
         out[role_id].append(
+            {
+                "source_name": row["source_name"],
+                "url": row["url"],
+                "doc_type": row["doc_type"],
+                "relation_type": row["relation_type"],
+            }
+        )
+    return out
+
+
+def fetch_person_link_rows(
+    conn: psycopg.Connection,
+    person_ids: list[int],
+) -> list[dict[str, Any]]:
+    ids = sorted({int(i) for i in person_ids})
+    if not ids:
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+          id,
+          person_a_id,
+          person_b_id,
+          relation_type,
+          relation_label,
+          start_on,
+          end_on,
+          confidence,
+          notes
+        FROM person_link
+        WHERE person_a_id = ANY(%s) OR person_b_id = ANY(%s)
+        ORDER BY id
+        """,
+        (ids, ids),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fetch_person_link_sources(
+    conn: psycopg.Connection,
+    person_link_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    ids = sorted({int(i) for i in person_link_ids})
+    if not ids:
+        return {}
+    rows = conn.execute(
+        """
+        SELECT
+          pls.person_link_id,
+          s.source_name,
+          s.url,
+          s.doc_type,
+          pls.relation_type
+        FROM person_link_source_document pls
+        JOIN source_document s ON s.id = pls.source_document_id
+        WHERE pls.person_link_id = ANY(%s)
+        ORDER BY pls.person_link_id, s.id
+        """,
+        (ids,),
+    ).fetchall()
+
+    out: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        link_id = int(row["person_link_id"])
+        out[link_id].append(
             {
                 "source_name": row["source_name"],
                 "url": row["url"],
@@ -1179,7 +1267,10 @@ def person_drilldown(
 
     dsn = get_dsn()
     profile_role_rows: dict[str, list[dict[str, Any]]] = {}
+    profile_person_rows: dict[str, dict[str, Any] | None] = {}
     role_sources: dict[int, list[dict[str, Any]]] = {}
+    person_link_rows: list[dict[str, Any]] = []
+    person_link_sources: dict[int, list[dict[str, Any]]] = {}
 
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         role_ids: list[int] = []
@@ -1197,7 +1288,21 @@ def person_drilldown(
             )
             profile_role_rows[key] = rows
             role_ids.extend(int(row["id"]) for row in rows)
+            if rows:
+                profile_person_rows[key] = {
+                    "id": int(rows[0]["person_id"]),
+                    "canonical_name": rows[0]["person_name"],
+                }
+            else:
+                profile_person_rows[key] = fetch_person_row_by_aliases(conn, aliases)
         role_sources = fetch_role_sources(conn, role_ids)
+        person_ids_for_links = [
+            int(row["id"]) for row in profile_person_rows.values() if row and row.get("id") is not None
+        ]
+        person_link_rows = fetch_person_link_rows(conn, person_ids_for_links)
+        person_link_sources = fetch_person_link_sources(
+            conn, [int(row["id"]) for row in person_link_rows]
+        )
 
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
@@ -1208,7 +1313,9 @@ def person_drilldown(
 
     person_node_ids: dict[str, str] = {}
     person_names: dict[str, str] = {}
+    person_db_ids: dict[str, int] = {}
     person_to_orgs: dict[str, set[str]] = {key: set() for key in profile_keys}
+    dataset_binding_signatures: set[tuple[str, str, str, int | None, int | None]] = set()
 
     def add_node(node_id: str, label: str, node_type: str, subtitle: str | None = None) -> None:
         if node_id in nodes:
@@ -1227,11 +1334,17 @@ def person_drilldown(
     for key in profile_keys:
         profile = profiles[key]
         rows = profile_role_rows.get(key, [])
+        person_row = profile_person_rows.get(key)
         person_name = profile.get("display_name", key)
         person_node_id = f"profile-person:{key}"
-        if rows:
+        if person_row:
+            person_name = person_row.get("canonical_name") or person_name
+            person_node_id = f"person:{person_row['id']}"
+            person_db_ids[key] = int(person_row["id"])
+        elif rows:
             person_name = rows[0]["person_name"] or person_name
             person_node_id = f"person:{rows[0]['person_id']}"
+            person_db_ids[key] = int(rows[0]["person_id"])
 
         node_type = "person_focus" if key == selected_key else "person_peer"
         subtitle = "Fokusperson" if key == selected_key else "I nøkkelnettverket"
@@ -1301,6 +1414,15 @@ def person_drilldown(
                 }
             )
             person_to_orgs[key].add(org_id)
+            dataset_binding_signatures.add(
+                (
+                    key,
+                    org_key,
+                    role_title.strip().lower(),
+                    start_year,
+                    end_year,
+                )
+            )
 
     for key in profile_keys:
         profile = profiles[key]
@@ -1361,6 +1483,15 @@ def person_drilldown(
             )
 
             role_title = item.get("role_title") or "Binding"
+            signature = (
+                key,
+                institution_key,
+                role_title.strip().lower(),
+                start_year,
+                end_year,
+            )
+            if signature in dataset_binding_signatures:
+                continue
             edge_id = f"curated-binding:{key}:{institution_key}:{idx}"
             sources = [
                 {
@@ -1416,7 +1547,78 @@ def person_drilldown(
             )
             person_to_orgs[key].add(institution_node_id)
 
-    seen_person_links: set[tuple[str, str, str]] = set()
+    seen_person_links: set[tuple[str, str, str, int | None, int | None]] = set()
+    person_id_to_key = {pid: key for key, pid in person_db_ids.items()}
+
+    for link_row in person_link_rows:
+        a_id = int(link_row["person_a_id"])
+        b_id = int(link_row["person_b_id"])
+        if a_id not in person_id_to_key or b_id not in person_id_to_key:
+            continue
+
+        k1 = person_id_to_key[a_id]
+        k2 = person_id_to_key[b_id]
+        pair = tuple(sorted([k1, k2]))
+        relation_type = link_row.get("relation_type") or "person_link"
+        label = link_row.get("relation_label") or relation_type
+        start_year = link_row["start_on"].year if link_row.get("start_on") else None
+        end_year = link_row["end_on"].year if link_row.get("end_on") else None
+
+        if not in_year_window(
+            year=None,
+            year_from=year_from,
+            year_to=year_to,
+            start_year=start_year,
+            end_year=end_year,
+        ):
+            continue
+
+        if not matches_query(
+            [
+                person_names.get(k1),
+                person_names.get(k2),
+                relation_type,
+                label,
+                link_row.get("notes"),
+            ],
+            q,
+        ):
+            continue
+
+        dedupe_key = (pair[0], pair[1], relation_type, start_year, end_year)
+        if dedupe_key in seen_person_links:
+            continue
+        seen_person_links.add(dedupe_key)
+
+        row_sources = person_link_sources.get(int(link_row["id"]), [])
+        edges.append(
+            {
+                "id": f"person-link-db:{link_row['id']}",
+                "from": person_node_ids[pair[0]],
+                "to": person_node_ids[pair[1]],
+                "type": "person_link",
+                "source_kind": "dataset",
+                "outside_dataset": False,
+                "label": short_label(label, limit=28),
+                "title": label,
+                "year": start_year,
+                "metadata": {
+                    "relation_type": relation_type,
+                    "start_year": start_year,
+                    "end_year": end_year,
+                    "confidence": (
+                        float(link_row["confidence"])
+                        if link_row.get("confidence") is not None
+                        else None
+                    ),
+                    "notes": link_row.get("notes"),
+                    "source_kind": "dataset",
+                    "outside_dataset": False,
+                },
+                "sources": row_sources,
+            }
+        )
+
     for key in profile_keys:
         profile = profiles[key]
         for link in profile.get("person_links", []):
@@ -1444,7 +1646,7 @@ def person_drilldown(
                 continue
 
             pair = tuple(sorted([key, target_key]))
-            dedupe_key = (pair[0], pair[1], relation_type)
+            dedupe_key = (pair[0], pair[1], relation_type, start_year, end_year)
             if dedupe_key in seen_person_links:
                 continue
             seen_person_links.add(dedupe_key)

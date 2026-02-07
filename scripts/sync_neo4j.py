@@ -19,6 +19,7 @@ GRAPH_LABELS = [
     "Person",
     "Organization",
     "RoleEvent",
+    "PersonLink",
     "FundingFlow",
     "SourceDocument",
     "ExternalRecipient",
@@ -163,6 +164,16 @@ def main() -> int:
                         """,
                     )
                 )
+                person_link_rows = convert_rows(
+                    fetch_rows(
+                        conn,
+                        """
+                        SELECT id, person_a_id, person_b_id, relation_type, relation_label,
+                               start_on, end_on, confidence, notes
+                        FROM person_link
+                        """,
+                    )
+                )
                 funding_rows = convert_rows(
                     fetch_rows(
                         conn,
@@ -182,6 +193,15 @@ def main() -> int:
                         """
                         SELECT role_event_id, source_document_id, relation_type
                         FROM role_event_source_document
+                        """,
+                    )
+                )
+                person_link_source_rows = convert_rows(
+                    fetch_rows(
+                        conn,
+                        """
+                        SELECT person_link_id, source_document_id, relation_type
+                        FROM person_link_source_document
                         """,
                     )
                 )
@@ -253,6 +273,26 @@ def main() -> int:
                 MERGE (r)-[:AT_ORGANIZATION]->(o)
                 """,
                 role_rows,
+                args.batch_size,
+            )
+
+            execute_in_batches(
+                session,
+                """
+                UNWIND $rows AS row
+                MATCH (p1:Person {pg_id: row.person_a_id})
+                MATCH (p2:Person {pg_id: row.person_b_id})
+                MERGE (pl:PersonLink {pg_id: row.id})
+                SET pl.relation_type = row.relation_type,
+                    pl.relation_label = row.relation_label,
+                    pl.start_on = row.start_on,
+                    pl.end_on = row.end_on,
+                    pl.confidence = row.confidence,
+                    pl.notes = row.notes
+                MERGE (p1)-[:HAS_PERSON_LINK]->(pl)
+                MERGE (pl)-[:LINKS_TO_PERSON]->(p2)
+                """,
+                person_link_rows,
                 args.batch_size,
             )
 
@@ -395,6 +435,18 @@ def main() -> int:
                 MERGE (r)-[rel:SUPPORTED_BY {relation_type: row.relation_type}]->(s)
                 """,
                 role_source_rows,
+                args.batch_size,
+            )
+
+            execute_in_batches(
+                session,
+                """
+                UNWIND $rows AS row
+                MATCH (pl:PersonLink {pg_id: row.person_link_id})
+                MATCH (s:SourceDocument {pg_id: row.source_document_id})
+                MERGE (pl)-[rel:SUPPORTED_BY {relation_type: row.relation_type}]->(s)
+                """,
+                person_link_source_rows,
                 args.batch_size,
             )
 

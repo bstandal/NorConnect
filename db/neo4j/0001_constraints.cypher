@@ -10,6 +10,10 @@ CREATE CONSTRAINT role_event_pg_id IF NOT EXISTS
 FOR (r:RoleEvent)
 REQUIRE r.pg_id IS UNIQUE;
 
+CREATE CONSTRAINT person_link_pg_id IF NOT EXISTS
+FOR (pl:PersonLink)
+REQUIRE pl.pg_id IS UNIQUE;
+
 CREATE CONSTRAINT funding_flow_pg_id IF NOT EXISTS
 FOR (f:FundingFlow)
 REQUIRE f.pg_id IS UNIQUE;

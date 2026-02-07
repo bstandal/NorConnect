@@ -40,18 +40,20 @@ Dette repoet setter opp en MVP-arkitektur for å kartlegge bindinger mellom nors
    - `python scripts/ingest_excel.py --file "$EXCEL_PATH"`
 6. Normaliser staging til kjerne-tabeller:
    - `python scripts/normalize_staging.py --truncate-core`
-7. Høst åpne IATI-data (norske publiserere i registry):
+7. Legg inn kuraterte person-/institusjonsbindinger i kjerne-tabeller:
+   - `python scripts/seed_curated_network.py`
+8. Høst åpne IATI-data (norske publiserere i registry):
    - `python scripts/harvest_iati_registry.py`
    - Begrenset test: `python scripts/harvest_iati_registry.py --max-resources 1 --max-activities 200`
-8. Normaliser IATI-staging til kjerne-tabeller:
+9. Normaliser IATI-staging til kjerne-tabeller:
    - `python scripts/normalize_iati_staging.py`
-9. Berik med øvrige offentlige data:
+10. Berik med øvrige offentlige data:
    - `python scripts/enrich_norad_oecd.py`
-10. Opprett constraints i Neo4j:
+11. Opprett constraints i Neo4j:
    - `python scripts/sync_neo4j.py --init-only`
-11. Sync data til graf:
+12. Sync data til graf:
    - `python scripts/sync_neo4j.py`
-12. Start webvisning:
+13. Start webvisning:
    - `uvicorn app.main:app --reload --port 8080`
    - Åpne `http://127.0.0.1:8080`
 
@@ -65,12 +67,14 @@ Kjerneentiteter i Postgres:
 - `organization`
 - `source_document`
 - `role_event`
+- `person_link`
 - `funding_flow`
 
 Kildebevis/junction-tabeller:
 - `person_source_document`
 - `organization_source_document`
 - `role_event_source_document`
+- `person_link_source_document`
 - `funding_flow_source_document`
 
 Staging for råimport:

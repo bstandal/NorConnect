@@ -1,4 +1,4 @@
-.PHONY: up down migrate ingest normalize harvest-iati normalize-iati enrich open-data sync sync-init web
+.PHONY: up down migrate ingest normalize seed-curated harvest-iati normalize-iati enrich open-data sync sync-init web
 
 up:
 	docker compose up -d
@@ -14,6 +14,9 @@ ingest:
 
 normalize:
 	python scripts/normalize_staging.py --truncate-core
+
+seed-curated:
+	python scripts/seed_curated_network.py
 
 harvest-iati:
 	python scripts/harvest_iati_registry.py
