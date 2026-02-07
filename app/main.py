@@ -158,7 +158,340 @@ PERSON_DRILLDOWN_PROFILES: dict[str, dict[str, Any]] = {
                 ],
             },
         ],
-    }
+        "person_links": [],
+    },
+    "terje-rod-larsen": {
+        "display_name": "Terje Rød-Larsen",
+        "aliases": [
+            "Terje Rød-Larsen",
+            "Terje Rod-Larsen",
+            "Terje Rød Larsen",
+            "Terje Rod Larsen",
+        ],
+        "group": "diplomacy-core",
+        "curated_bindings": [
+            {
+                "institution_name": "International Peace Institute",
+                "institution_type": "think_tank",
+                "role_title": "President",
+                "relation_type": "office",
+                "start_year": 2005,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Freds- og diplomatibinding.",
+                "sources": [
+                    {
+                        "source_name": "International Peace Institute",
+                        "url": "https://www.ipinst.org/",
+                        "doc_type": "organization_profile",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "FAFO",
+                "institution_type": "research_foundation",
+                "role_title": "Tidligere leder / grunnlegger",
+                "relation_type": "office",
+                "start_year": None,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Institusjonell kobling gjennom norsk forskningsmiljø.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Terje Rød-Larsen",
+                        "url": "https://no.wikipedia.org/wiki/Terje_R%C3%B8d-Larsen",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "FN",
+                "institution_type": "international_organization",
+                "role_title": "Tidligere spesialkoordinator",
+                "relation_type": "appointment",
+                "start_year": None,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Kobling til FN-systemet gjennom diplomatisk oppdrag.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Terje Rød-Larsen",
+                        "url": "https://no.wikipedia.org/wiki/Terje_R%C3%B8d-Larsen",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+        ],
+        "person_links": [
+            {
+                "target_key": "mona-juul",
+                "relation_type": "family",
+                "label": "Ektefeller og diplomatisk nettverk",
+                "start_year": None,
+                "end_year": None,
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Terje Rød-Larsen",
+                        "url": "https://no.wikipedia.org/wiki/Terje_R%C3%B8d-Larsen",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            }
+        ],
+    },
+    "mona-juul": {
+        "display_name": "Mona Juul",
+        "aliases": [
+            "Mona Juul",
+        ],
+        "group": "diplomacy-core",
+        "curated_bindings": [
+            {
+                "institution_name": "FN",
+                "institution_type": "international_organization",
+                "role_title": "Tidligere FN-ambassadør for Norge",
+                "relation_type": "appointment",
+                "start_year": 2019,
+                "end_year": 2023,
+                "outside_dataset": True,
+                "notes": "Norsk representasjon mot FN-systemet.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Mona Juul",
+                        "url": "https://no.wikipedia.org/wiki/Mona_Juul",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Utenriksdepartementet",
+                "institution_type": "government",
+                "role_title": "Diplomat",
+                "relation_type": "office",
+                "start_year": None,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Bred tilknytning til norsk utenrikstjeneste.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Mona Juul",
+                        "url": "https://no.wikipedia.org/wiki/Mona_Juul",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Norsk utenrikstjeneste i Storbritannia",
+                "institution_type": "foreign_service",
+                "role_title": "Tidligere ambassadør",
+                "relation_type": "office",
+                "start_year": None,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Diplomatisk nøkkelpost i London.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Mona Juul",
+                        "url": "https://no.wikipedia.org/wiki/Mona_Juul",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+        ],
+        "person_links": [
+            {
+                "target_key": "ine-eriksen-soreide",
+                "relation_type": "diplomatic_network",
+                "label": "Tilknytning via UD/FN-spor",
+                "start_year": None,
+                "end_year": None,
+                "sources": [],
+            },
+            {
+                "target_key": "borge-brende",
+                "relation_type": "diplomatic_network",
+                "label": "Tilknytning via UD og internasjonale arenaer",
+                "start_year": None,
+                "end_year": None,
+                "sources": [],
+            },
+        ],
+    },
+    "borge-brende": {
+        "display_name": "Børge Brende",
+        "aliases": [
+            "Børge Brende",
+            "Borge Brende",
+        ],
+        "group": "diplomacy-core",
+        "curated_bindings": [
+            {
+                "institution_name": "World Economic Forum",
+                "institution_type": "international_foundation",
+                "role_title": "President",
+                "relation_type": "office",
+                "start_year": 2017,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Sentral kobling mot global policy- og næringslivsarena.",
+                "sources": [
+                    {
+                        "source_name": "World Economic Forum",
+                        "url": "https://www.weforum.org/",
+                        "doc_type": "organization_profile",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Utenriksdepartementet",
+                "institution_type": "government",
+                "role_title": "Utenriksminister",
+                "relation_type": "office",
+                "start_year": 2013,
+                "end_year": 2017,
+                "outside_dataset": True,
+                "notes": "Direkte kobling mot norsk utenrikspolitisk apparat.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Børge Brende",
+                        "url": "https://no.wikipedia.org/wiki/B%C3%B8rge_Brende",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Høyre",
+                "institution_type": "political_party",
+                "role_title": "Politisk verv",
+                "relation_type": "office",
+                "start_year": None,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Partibinding relevant for norsk policy-nettverk.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Børge Brende",
+                        "url": "https://no.wikipedia.org/wiki/B%C3%B8rge_Brende",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+        ],
+        "person_links": [
+            {
+                "target_key": "ine-eriksen-soreide",
+                "relation_type": "government_network",
+                "label": "Regjerings- og UD-kobling",
+                "start_year": None,
+                "end_year": None,
+                "sources": [],
+            }
+        ],
+    },
+    "ine-eriksen-soreide": {
+        "display_name": "Ine Eriksen Søreide",
+        "aliases": [
+            "Ine Eriksen Søreide",
+            "Ine Eriksen Soreide",
+            "Ine Søreide",
+            "Ine Soreide",
+        ],
+        "group": "diplomacy-core",
+        "curated_bindings": [
+            {
+                "institution_name": "Utenriksdepartementet",
+                "institution_type": "government",
+                "role_title": "Utenriksminister",
+                "relation_type": "office",
+                "start_year": 2017,
+                "end_year": 2021,
+                "outside_dataset": True,
+                "notes": "Nøkkelrolle i norsk utenrikspolitikk.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Ine Eriksen Søreide",
+                        "url": "https://no.wikipedia.org/wiki/Ine_Eriksen_S%C3%B8reide",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Forsvarsdepartementet",
+                "institution_type": "government",
+                "role_title": "Forsvarsminister",
+                "relation_type": "office",
+                "start_year": 2013,
+                "end_year": 2017,
+                "outside_dataset": True,
+                "notes": "Kobling mot norsk sikkerhetspolitisk nettverk.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Ine Eriksen Søreide",
+                        "url": "https://no.wikipedia.org/wiki/Ine_Eriksen_S%C3%B8reide",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Stortinget",
+                "institution_type": "parliament",
+                "role_title": "Stortingsrepresentant",
+                "relation_type": "office",
+                "start_year": None,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Parlamentarisk forankring i nettverket.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Ine Eriksen Søreide",
+                        "url": "https://no.wikipedia.org/wiki/Ine_Eriksen_S%C3%B8reide",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+            {
+                "institution_name": "Høyre",
+                "institution_type": "political_party",
+                "role_title": "Politisk verv",
+                "relation_type": "office",
+                "start_year": None,
+                "end_year": None,
+                "outside_dataset": True,
+                "notes": "Partibinding relevant for policy-sfæren.",
+                "sources": [
+                    {
+                        "source_name": "Wikipedia (no): Ine Eriksen Søreide",
+                        "url": "https://no.wikipedia.org/wiki/Ine_Eriksen_S%C3%B8reide",
+                        "doc_type": "biography",
+                        "relation_type": "curated_reference",
+                    }
+                ],
+            },
+        ],
+        "person_links": [],
+    },
+}
+
+PERSON_DRILLDOWN_GROUPS: dict[str, list[str]] = {
+    "diplomacy-core": [
+        "terje-rod-larsen",
+        "mona-juul",
+        "borge-brende",
+        "ine-eriksen-soreide",
+    ],
 }
 DEFAULT_PERSON_DRILLDOWN_KEY = "torbjorn-jagland"
 
