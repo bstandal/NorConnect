@@ -275,6 +275,12 @@ body {
   color: #2f4e47;
 }
 
+.person-bindings > p {
+  margin: 0 0 10px;
+  color: #4b655f;
+  font-size: 12px;
+}
+
 .binding-items {
   display: flex;
   flex-direction: column;

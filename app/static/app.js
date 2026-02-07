@@ -310,6 +310,18 @@ function personNodeStyle(node) {
     };
   }
 
+  if (node.type === "person_peer") {
+    return {
+      shape: "dot",
+      size: 18,
+      color: {
+        background: "#92d8cc",
+        border: "#2b8677",
+      },
+      font: { color: "#1f413a", size: 13, face: "Space Grotesk" },
+    };
+  }
+
   if (node.type === "external_institution") {
     return {
       shape: "hexagon",
@@ -338,6 +350,26 @@ function personNodeStyle(node) {
 }
 
 function personEdgeStyle(edge) {
+  if (edge.type === "shared_institution") {
+    return {
+      color: { color: "#1d6f9d", highlight: "#145274" },
+      width: 1.5 + Math.min(4, Number(edge.label || 1)),
+      dashes: [6, 5],
+      arrows: { to: { enabled: false } },
+      font: { align: "middle", size: 10, face: "IBM Plex Mono", color: "#16435d" },
+    };
+  }
+
+  if (edge.type === "person_link") {
+    return {
+      color: { color: "#7b6752", highlight: "#5a4a3a" },
+      width: 2.6,
+      dashes: false,
+      arrows: { to: { enabled: false } },
+      font: { align: "middle", size: 10, face: "IBM Plex Mono", color: "#4f3d2f" },
+    };
+  }
+
   if (edge.source_kind === "dataset") {
     return {
       color: { color: "#188776", highlight: "#10685a" },
@@ -365,7 +397,12 @@ function renderPersonBindings(payload) {
   const bindings = payload.bindings || [];
   const rows = bindings
     .map((binding) => {
+      const isFocus =
+        currentPersonDrilldown.person &&
+        currentPersonDrilldown.person.key &&
+        binding.person_key === currentPersonDrilldown.person.key;
       const chips = [
+        isFocus ? "Fokusperson" : "Peer",
         binding.source_kind === "dataset" ? "Datagrunnlag" : "Kuratert",
         binding.outside_dataset ? "Utenfor datagrunnlag" : "I datagrunnlag",
       ];
@@ -379,15 +416,18 @@ function renderPersonBindings(payload) {
             <b>${escapeHtml(binding.institution_name || "Ukjent institusjon")}</b>
             <div>${chipHtml}</div>
           </div>
-          <p>${escapeHtml(binding.role_title || "Binding")} · ${escapeHtml(period)}</p>
+          <p>${escapeHtml(binding.person_name || "Ukjent person")} · ${escapeHtml(binding.role_title || "Binding")} · ${escapeHtml(period)}</p>
         </button>
       `;
     })
     .join("\n");
 
   const personName = payload.person ? payload.person.display_name : "Person";
+  const peopleInScope =
+    payload.network_scope && payload.network_scope.people ? payload.network_scope.people.length : 1;
   personBindingsEl.innerHTML = `
     <h3>Bindinger for ${escapeHtml(personName || "person")}</h3>
+    <p>${peopleInScope} person(er) i aktivt nettverk.</p>
     <div class="binding-items">
       ${rows || "<p>Ingen bindinger i valgt filter.</p>"}
     </div>
@@ -831,6 +871,8 @@ function updateStats(graphStats, timelinePayload, coboardStats, personStats) {
   const years = (timelinePayload && timelinePayload.years ? timelinePayload.years.length : 0) || 0;
   const coboardEdges = (coboardStats && coboardStats.edges) || 0;
   const personEdges = (personStats && personStats.edges) || 0;
+  const personSharedEdges = (personStats && personStats.shared_edges) || 0;
+  const people = (personStats && personStats.people) || 0;
   const outsideInstitutions =
     (personStats && personStats.outside_dataset_institutions) || 0;
   const fundingText = s.funding_edges_truncated
@@ -838,7 +880,7 @@ function updateStats(graphStats, timelinePayload, coboardStats, personStats) {
     : `${s.funding_edges || 0}`;
   statsEl.textContent = `noder=${s.nodes || 0} | kanter=${s.edges || 0} | roller=${
     s.role_edges || 0
-  } | funding=${fundingText} | år=${years} | co-board=${coboardEdges} | drilldown=${personEdges} | ekst-inst=${outsideInstitutions}`;
+  } | funding=${fundingText} | år=${years} | co-board=${coboardEdges} | drilldown=${personEdges} | personer=${people} | delte=${personSharedEdges} | ekst-inst=${outsideInstitutions}`;
 }
 
 async function fetchJson(url) {

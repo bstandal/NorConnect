@@ -1166,35 +1166,56 @@ def person_drilldown(
     year_from: int | None = Query(default=None),
     year_to: int | None = Query(default=None),
 ) -> JSONResponse:
-    profile_key, profile = resolve_person_profile(person_key)
-    aliases = [
-        profile.get("display_name", ""),
-        *profile.get("aliases", []),
-    ]
+    selected_key, selected_profile = resolve_person_profile(person_key)
+    group_key = selected_profile.get("group")
+    group_members = PERSON_DRILLDOWN_GROUPS.get(group_key or "", [])
+
+    profile_keys = [selected_key]
+    for key in group_members:
+        if key in PERSON_DRILLDOWN_PROFILES and key not in profile_keys:
+            profile_keys.append(key)
+
+    profiles = {key: PERSON_DRILLDOWN_PROFILES[key] for key in profile_keys}
 
     dsn = get_dsn()
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        db_role_rows = filter_role_rows(
-            fetch_person_role_rows(conn, aliases),
-            q=q,
-            year_from=year_from,
-            year_to=year_to,
-        )
-        role_sources = fetch_role_sources(conn, [int(row["id"]) for row in db_role_rows])
+    profile_role_rows: dict[str, list[dict[str, Any]]] = {}
+    role_sources: dict[int, list[dict[str, Any]]] = {}
 
-    person_name = profile.get("display_name", "Ukjent person")
-    person_node_id = f"profile-person:{profile_key}"
-    if db_role_rows:
-        person_name = db_role_rows[0]["person_name"] or person_name
-        person_node_id = f"person:{db_role_rows[0]['person_id']}"
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        role_ids: list[int] = []
+        for key in profile_keys:
+            profile = profiles[key]
+            aliases = [
+                profile.get("display_name", ""),
+                *profile.get("aliases", []),
+            ]
+            rows = filter_role_rows(
+                fetch_person_role_rows(conn, aliases),
+                q=q,
+                year_from=year_from,
+                year_to=year_to,
+            )
+            profile_role_rows[key] = rows
+            role_ids.extend(int(row["id"]) for row in rows)
+        role_sources = fetch_role_sources(conn, role_ids)
 
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     bindings: list[dict[str, Any]] = []
     org_name_to_node_id: dict[str, str] = {}
+    org_node_outside: dict[str, bool] = {}
+    org_node_names: dict[str, str] = {}
+
+    person_node_ids: dict[str, str] = {}
+    person_names: dict[str, str] = {}
+    person_to_orgs: dict[str, set[str]] = {key: set() for key in profile_keys}
 
     def add_node(node_id: str, label: str, node_type: str, subtitle: str | None = None) -> None:
         if node_id in nodes:
+            existing = nodes[node_id]
+            if existing["type"] != "person_focus" and node_type == "person_focus":
+                existing["type"] = node_type
+                existing["subtitle"] = subtitle
             return
         nodes[node_id] = {
             "id": node_id,
@@ -1203,177 +1224,330 @@ def person_drilldown(
             "subtitle": subtitle,
         }
 
-    add_node(person_node_id, person_name, "person_focus", "Person-drilldown")
+    for key in profile_keys:
+        profile = profiles[key]
+        rows = profile_role_rows.get(key, [])
+        person_name = profile.get("display_name", key)
+        person_node_id = f"profile-person:{key}"
+        if rows:
+            person_name = rows[0]["person_name"] or person_name
+            person_node_id = f"person:{rows[0]['person_id']}"
 
-    for row in db_role_rows:
-        org_id = f"org:{row['org_id']}"
-        add_node(org_id, row["org_name"], "organization", "Fra datagrunnlag")
-        org_name_to_node_id[external_recipient_key(row["org_name"])] = org_id
+        node_type = "person_focus" if key == selected_key else "person_peer"
+        subtitle = "Fokusperson" if key == selected_key else "I nøkkelnettverket"
+        add_node(person_node_id, person_name, node_type, subtitle)
+        person_node_ids[key] = person_node_id
+        person_names[key] = person_name
 
-        start_year = row["start_on"].year if row["start_on"] else None
-        end_year = row["end_on"].year if row["end_on"] else None
-        edge_id = f"person-role:{row['id']}"
-        edge_sources = role_sources.get(int(row["id"]), [])
-        role_title = row["role_title"] or "Rolle"
+    for key in profile_keys:
+        rows = profile_role_rows.get(key, [])
+        person_node_id = person_node_ids[key]
+        person_name = person_names[key]
 
-        edge_payload = {
-            "id": edge_id,
-            "from": person_node_id,
-            "to": org_id,
-            "type": "person_role",
-            "source_kind": "dataset",
-            "outside_dataset": False,
-            "label": short_label(role_title, limit=32),
-            "title": role_title,
-            "year": row.get("anchor_year"),
-            "metadata": {
-                "role_title": role_title,
-                "role_level": row.get("role_level"),
-                "start_year": start_year,
-                "end_year": end_year,
-                "source_kind": "dataset",
-                "outside_dataset": False,
-            },
-            "sources": edge_sources,
-        }
-        edges.append(edge_payload)
-        bindings.append(
-            {
-                "id": edge_id,
-                "institution_node_id": org_id,
-                "institution_name": row["org_name"],
-                "role_title": role_title,
-                "relation_type": "role_event",
-                "start_year": start_year,
-                "end_year": end_year,
-                "source_kind": "dataset",
-                "outside_dataset": False,
-                "notes": row.get("norwegian_position_before"),
-                "sources": edge_sources,
-            }
-        )
+        for row in rows:
+            org_id = f"org:{row['org_id']}"
+            org_name = row["org_name"]
+            org_key = external_recipient_key(org_name)
 
-    for idx, item in enumerate(profile.get("curated_bindings", [])):
-        start_year = item.get("start_year")
-        end_year = item.get("end_year")
-        if not in_year_window(
-            year=None,
-            year_from=year_from,
-            year_to=year_to,
-            start_year=start_year,
-            end_year=end_year,
-        ):
-            continue
+            add_node(org_id, org_name, "organization", "Fra datagrunnlag")
+            org_name_to_node_id[org_key] = org_id
+            org_node_names[org_id] = org_name
+            org_node_outside[org_id] = False
 
-        if not matches_query(
-            [
-                person_name,
-                item.get("institution_name"),
-                item.get("role_title"),
-                item.get("relation_type"),
-                item.get("notes"),
-            ],
-            q,
-        ):
-            continue
+            start_year = row["start_on"].year if row["start_on"] else None
+            end_year = row["end_on"].year if row["end_on"] else None
+            role_title = row["role_title"] or "Rolle"
+            edge_id = f"person-role:{key}:{row['id']}"
+            edge_sources = role_sources.get(int(row["id"]), [])
 
-        institution_name = item.get("institution_name") or "Ukjent institusjon"
-        institution_key = external_recipient_key(institution_name)
-        outside_dataset = bool(item.get("outside_dataset", True))
-        institution_node_id = org_name_to_node_id.get(institution_key)
+            edges.append(
+                {
+                    "id": edge_id,
+                    "from": person_node_id,
+                    "to": org_id,
+                    "type": "person_role",
+                    "source_kind": "dataset",
+                    "outside_dataset": False,
+                    "label": short_label(role_title, limit=32),
+                    "title": role_title,
+                    "year": row.get("anchor_year"),
+                    "metadata": {
+                        "person_name": person_name,
+                        "role_title": role_title,
+                        "role_level": row.get("role_level"),
+                        "start_year": start_year,
+                        "end_year": end_year,
+                        "source_kind": "dataset",
+                        "outside_dataset": False,
+                    },
+                    "sources": edge_sources,
+                }
+            )
+            bindings.append(
+                {
+                    "id": edge_id,
+                    "person_key": key,
+                    "person_name": person_name,
+                    "institution_node_id": org_id,
+                    "institution_name": org_name,
+                    "role_title": role_title,
+                    "relation_type": "role_event",
+                    "start_year": start_year,
+                    "end_year": end_year,
+                    "source_kind": "dataset",
+                    "outside_dataset": False,
+                    "notes": row.get("norwegian_position_before"),
+                    "sources": edge_sources,
+                }
+            )
+            person_to_orgs[key].add(org_id)
 
-        if not institution_node_id:
-            if outside_dataset:
-                institution_node_id = f"external-institution:{institution_key}"
-                add_node(
-                    institution_node_id,
-                    institution_name,
-                    "external_institution",
-                    "Utenfor datagrunnlag",
-                )
-            else:
-                institution_node_id = f"curated-organization:{institution_key}"
-                add_node(
-                    institution_node_id,
-                    institution_name,
-                    "organization",
-                    "Kuratert binding",
-                )
+    for key in profile_keys:
+        profile = profiles[key]
+        person_node_id = person_node_ids[key]
+        person_name = person_names[key]
+
+        for idx, item in enumerate(profile.get("curated_bindings", [])):
+            start_year = item.get("start_year")
+            end_year = item.get("end_year")
+            if not in_year_window(
+                year=None,
+                year_from=year_from,
+                year_to=year_to,
+                start_year=start_year,
+                end_year=end_year,
+            ):
+                continue
+
+            if not matches_query(
+                [
+                    person_name,
+                    item.get("institution_name"),
+                    item.get("role_title"),
+                    item.get("relation_type"),
+                    item.get("notes"),
+                ],
+                q,
+            ):
+                continue
+
+            institution_name = item.get("institution_name") or "Ukjent institusjon"
+            institution_key = external_recipient_key(institution_name)
+            outside_dataset = bool(item.get("outside_dataset", True))
+            institution_node_id = org_name_to_node_id.get(institution_key)
+
+            if not institution_node_id:
+                if outside_dataset:
+                    institution_node_id = f"external-institution:{institution_key}"
+                    add_node(
+                        institution_node_id,
+                        institution_name,
+                        "external_institution",
+                        "Utenfor datagrunnlag",
+                    )
+                else:
+                    institution_node_id = f"curated-organization:{institution_key}"
+                    add_node(
+                        institution_node_id,
+                        institution_name,
+                        "organization",
+                        "Kuratert binding",
+                    )
                 org_name_to_node_id[institution_key] = institution_node_id
 
-        role_title = item.get("role_title") or "Binding"
-        edge_id = f"curated-binding:{profile_key}:{institution_key}:{idx}"
-        sources = [
-            {
-                "source_name": s.get("source_name"),
-                "url": s.get("url"),
-                "doc_type": s.get("doc_type"),
-                "relation_type": s.get("relation_type"),
-            }
-            for s in item.get("sources", [])
-        ]
+            org_node_names[institution_node_id] = institution_name
+            org_node_outside[institution_node_id] = (
+                org_node_outside.get(institution_node_id, True) and outside_dataset
+            )
 
-        edge_payload = {
-            "id": edge_id,
-            "from": person_node_id,
-            "to": institution_node_id,
-            "type": "curated_binding",
-            "source_kind": "curated",
-            "outside_dataset": outside_dataset,
-            "label": short_label(role_title, limit=32),
-            "title": role_title,
-            "year": start_year,
-            "metadata": {
-                "role_title": role_title,
-                "relation_type": item.get("relation_type"),
-                "institution_type": item.get("institution_type"),
-                "start_year": start_year,
-                "end_year": end_year,
-                "source_kind": "curated",
-                "outside_dataset": outside_dataset,
-                "notes": item.get("notes"),
-            },
-            "sources": sources,
-        }
-        edges.append(edge_payload)
-        bindings.append(
+            role_title = item.get("role_title") or "Binding"
+            edge_id = f"curated-binding:{key}:{institution_key}:{idx}"
+            sources = [
+                {
+                    "source_name": s.get("source_name"),
+                    "url": s.get("url"),
+                    "doc_type": s.get("doc_type"),
+                    "relation_type": s.get("relation_type"),
+                }
+                for s in item.get("sources", [])
+            ]
+
+            edges.append(
+                {
+                    "id": edge_id,
+                    "from": person_node_id,
+                    "to": institution_node_id,
+                    "type": "curated_binding",
+                    "source_kind": "curated",
+                    "outside_dataset": outside_dataset,
+                    "label": short_label(role_title, limit=32),
+                    "title": role_title,
+                    "year": start_year,
+                    "metadata": {
+                        "person_name": person_name,
+                        "role_title": role_title,
+                        "relation_type": item.get("relation_type"),
+                        "institution_type": item.get("institution_type"),
+                        "start_year": start_year,
+                        "end_year": end_year,
+                        "source_kind": "curated",
+                        "outside_dataset": outside_dataset,
+                        "notes": item.get("notes"),
+                    },
+                    "sources": sources,
+                }
+            )
+            bindings.append(
+                {
+                    "id": edge_id,
+                    "person_key": key,
+                    "person_name": person_name,
+                    "institution_node_id": institution_node_id,
+                    "institution_name": institution_name,
+                    "role_title": role_title,
+                    "relation_type": item.get("relation_type"),
+                    "start_year": start_year,
+                    "end_year": end_year,
+                    "source_kind": "curated",
+                    "outside_dataset": outside_dataset,
+                    "notes": item.get("notes"),
+                    "sources": sources,
+                }
+            )
+            person_to_orgs[key].add(institution_node_id)
+
+    seen_person_links: set[tuple[str, str, str]] = set()
+    for key in profile_keys:
+        profile = profiles[key]
+        for link in profile.get("person_links", []):
+            target_key = link.get("target_key")
+            if not target_key or target_key not in person_node_ids:
+                continue
+
+            start_year = link.get("start_year")
+            end_year = link.get("end_year")
+            if not in_year_window(
+                year=None,
+                year_from=year_from,
+                year_to=year_to,
+                start_year=start_year,
+                end_year=end_year,
+            ):
+                continue
+
+            relation_type = link.get("relation_type") or "person_link"
+            label = link.get("label") or relation_type
+            if not matches_query(
+                [person_names[key], person_names[target_key], relation_type, label],
+                q,
+            ):
+                continue
+
+            pair = tuple(sorted([key, target_key]))
+            dedupe_key = (pair[0], pair[1], relation_type)
+            if dedupe_key in seen_person_links:
+                continue
+            seen_person_links.add(dedupe_key)
+
+            edge_id = f"person-link:{pair[0]}:{pair[1]}:{slug_key(relation_type)}"
+            sources = [
+                {
+                    "source_name": s.get("source_name"),
+                    "url": s.get("url"),
+                    "doc_type": s.get("doc_type"),
+                    "relation_type": s.get("relation_type"),
+                }
+                for s in link.get("sources", [])
+            ]
+
+            edges.append(
+                {
+                    "id": edge_id,
+                    "from": person_node_ids[pair[0]],
+                    "to": person_node_ids[pair[1]],
+                    "type": "person_link",
+                    "source_kind": "curated",
+                    "outside_dataset": False,
+                    "label": short_label(label, limit=28),
+                    "title": label,
+                    "year": start_year,
+                    "metadata": {
+                        "relation_type": relation_type,
+                        "start_year": start_year,
+                        "end_year": end_year,
+                        "source_kind": "curated",
+                        "outside_dataset": False,
+                    },
+                    "sources": sources,
+                }
+            )
+
+    for k1, k2 in combinations(sorted(profile_keys), 2):
+        shared_orgs = sorted(person_to_orgs[k1] & person_to_orgs[k2])
+        if not shared_orgs:
+            continue
+
+        institution_names = [org_node_names.get(node_id, node_id) for node_id in shared_orgs]
+        if not matches_query([person_names[k1], person_names[k2], *institution_names], q):
+            continue
+
+        edges.append(
             {
-                "id": edge_id,
-                "institution_node_id": institution_node_id,
-                "institution_name": institution_name,
-                "role_title": role_title,
-                "relation_type": item.get("relation_type"),
-                "start_year": start_year,
-                "end_year": end_year,
-                "source_kind": "curated",
-                "outside_dataset": outside_dataset,
-                "notes": item.get("notes"),
-                "sources": sources,
+                "id": f"shared-org:{k1}:{k2}",
+                "from": person_node_ids[k1],
+                "to": person_node_ids[k2],
+                "type": "shared_institution",
+                "source_kind": "derived",
+                "outside_dataset": False,
+                "label": str(len(shared_orgs)),
+                "title": "Delte institusjoner",
+                "year": None,
+                "metadata": {
+                    "shared_count": len(shared_orgs),
+                    "shared_institutions": ", ".join(institution_names),
+                    "source_kind": "derived",
+                    "outside_dataset": False,
+                },
+                "sources": [],
             }
         )
 
-    connected_node_ids = {person_node_id}
+    connected_node_ids = set(person_node_ids.values())
     connected_node_ids.update(e["from"] for e in edges)
     connected_node_ids.update(e["to"] for e in edges)
-
     filtered_nodes = [node for node_id, node in nodes.items() if node_id in connected_node_ids]
+
     bindings.sort(
         key=lambda item: (
+            item["person_key"] != selected_key,
             item["start_year"] is None,
             -(item["start_year"] or 0),
+            item["person_name"],
             item["institution_name"],
         )
     )
 
     outside_dataset_nodes = {
-        item["institution_node_id"] for item in bindings if item.get("outside_dataset")
+        node_id
+        for node_id in connected_node_ids
+        if node_id in org_node_outside and org_node_outside[node_id]
     }
 
     return JSONResponse(
         {
             "person": {
-                "key": profile_key,
-                "display_name": person_name,
+                "key": selected_key,
+                "display_name": person_names.get(selected_key, selected_profile.get("display_name", selected_key)),
+            },
+            "network_scope": {
+                "group": group_key,
+                "people": [
+                    {
+                        "key": key,
+                        "display_name": person_names.get(key, profiles[key].get("display_name", key)),
+                    }
+                    for key in profile_keys
+                ],
             },
             "available_profiles": [
                 {
@@ -1391,8 +1565,10 @@ def person_drilldown(
             "stats": {
                 "nodes": len(filtered_nodes),
                 "edges": len(edges),
+                "people": len(person_node_ids),
                 "dataset_edges": sum(1 for e in edges if e["source_kind"] == "dataset"),
                 "curated_edges": sum(1 for e in edges if e["source_kind"] == "curated"),
+                "shared_edges": sum(1 for e in edges if e["type"] == "shared_institution"),
                 "outside_dataset_institutions": len(outside_dataset_nodes),
             },
         }
