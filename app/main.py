@@ -1,0 +1,740 @@
+from __future__ import annotations
+
+import os
+from collections import defaultdict
+from itertools import combinations
+from pathlib import Path
+from typing import Any
+
+import psycopg
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from psycopg.rows import dict_row
+
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+
+app = FastAPI(title="NONGO Graph View", version="0.2.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def get_dsn() -> str:
+    dsn = os.getenv("POSTGRES_DSN")
+    if not dsn:
+        raise RuntimeError("POSTGRES_DSN is required")
+    return dsn
+
+
+def short_label(text: str, limit: int = 28) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def format_amount(amount: float | None, currency: str | None) -> str:
+    if amount is None:
+        return "?"
+    cur = (currency or "").upper()
+    if cur == "USD":
+        if abs(amount) >= 1_000_000:
+            return f"${amount / 1_000_000:.1f}M"
+        return f"${amount:,.0f}"
+
+    if abs(amount) >= 1_000_000_000:
+        return f"{amount / 1_000_000_000:.2f} mrd"
+    if abs(amount) >= 1_000_000:
+        return f"{amount / 1_000_000:.1f} mill"
+    return f"{amount:,.0f}"
+
+
+def in_year_window(
+    *,
+    year: int | None,
+    year_from: int | None,
+    year_to: int | None,
+    start_year: int | None = None,
+    end_year: int | None = None,
+) -> bool:
+    if year is not None:
+        if year_from is not None and year < year_from:
+            return False
+        if year_to is not None and year > year_to:
+            return False
+        return True
+
+    effective_start = start_year if start_year is not None else 0
+    effective_end = end_year if end_year is not None else 9999
+    if year_from is not None and effective_end < year_from:
+        return False
+    if year_to is not None and effective_start > year_to:
+        return False
+    return True
+
+
+def matches_query(texts: list[str | None], q: str | None) -> bool:
+    if not q:
+        return True
+    qn = q.lower().strip()
+    if not qn:
+        return True
+    for text in texts:
+        if text and qn in text.lower():
+            return True
+    return False
+
+
+def role_year_bounds(row: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    start_year = row["start_on"].year if row["start_on"] else None
+    end_year = row["end_on"].year if row["end_on"] else None
+    announced_year = row["announced_on"].year if row["announced_on"] else None
+    anchor_year = start_year or announced_year
+    return start_year, end_year, anchor_year
+
+
+def funding_year_bounds(row: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    period_start_year = row["period_start"].year if row["period_start"] else None
+    period_end_year = row["period_end"].year if row["period_end"] else None
+    fiscal_year = row["fiscal_year"]
+    return period_start_year, period_end_year, fiscal_year
+
+
+def funding_amount_fields(row: dict[str, Any]) -> tuple[float | None, str, float | None, float | None]:
+    amount_nok = float(row["amount_nok"]) if row["amount_nok"] is not None else None
+    amount_original = float(row["amount_original"]) if row["amount_original"] is not None else None
+    currency = (row["currency_code"] or "").upper()
+
+    amount_for_label = amount_nok
+    label_currency = "NOK"
+    if amount_for_label is None and amount_original is not None:
+        amount_for_label = amount_original
+        label_currency = currency or "USD"
+
+    return amount_for_label, label_currency, amount_nok, amount_original
+
+
+def fetch_role_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+          r.id,
+          r.role_title,
+          r.role_level,
+          r.norwegian_position_before,
+          r.announced_on,
+          r.start_on,
+          r.end_on,
+          p.id AS person_id,
+          p.canonical_name AS person_name,
+          o.id AS org_id,
+          o.canonical_name AS org_name
+        FROM role_event r
+        JOIN person p ON p.id = r.person_id
+        JOIN organization o ON o.id = r.organization_id
+        ORDER BY r.id
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fetch_funding_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+          f.id,
+          f.funding_channel,
+          f.amount_nok,
+          f.amount_original,
+          f.currency_code,
+          f.fiscal_year,
+          f.period_start,
+          f.period_end,
+          f.notes,
+          o.id AS org_id,
+          o.canonical_name AS org_name
+        FROM funding_flow f
+        JOIN organization o ON o.id = f.recipient_organization_id
+        ORDER BY f.id
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def filter_role_rows(
+    rows: list[dict[str, Any]],
+    *,
+    q: str | None,
+    year_from: int | None,
+    year_to: int | None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        start_year, end_year, anchor_year = role_year_bounds(row)
+        if not in_year_window(
+            year=None,
+            year_from=year_from,
+            year_to=year_to,
+            start_year=anchor_year,
+            end_year=end_year,
+        ):
+            continue
+
+        if not matches_query(
+            [row["person_name"], row["org_name"], row["role_title"], row["role_level"]],
+            q,
+        ):
+            continue
+
+        row_copy = dict(row)
+        row_copy["anchor_year"] = anchor_year
+        out.append(row_copy)
+    return out
+
+
+def filter_funding_rows(
+    rows: list[dict[str, Any]],
+    *,
+    q: str | None,
+    year_from: int | None,
+    year_to: int | None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        period_start_year, period_end_year, fiscal_year = funding_year_bounds(row)
+        if not in_year_window(
+            year=fiscal_year,
+            year_from=year_from,
+            year_to=year_to,
+            start_year=period_start_year,
+            end_year=period_end_year,
+        ):
+            continue
+
+        if not matches_query([row["org_name"], row["funding_channel"]], q):
+            continue
+
+        out.append(dict(row))
+    return out
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/graph")
+def graph(
+    q: str | None = Query(default=None),
+    year_from: int | None = Query(default=None),
+    year_to: int | None = Query(default=None),
+    include_roles: bool = Query(default=True),
+    include_funding: bool = Query(default=True),
+) -> JSONResponse:
+    dsn = get_dsn()
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+
+    def add_node(node_id: str, label: str, node_type: str, subtitle: str | None = None) -> None:
+        if node_id in nodes:
+            return
+        nodes[node_id] = {
+            "id": node_id,
+            "label": label,
+            "type": node_type,
+            "subtitle": subtitle,
+        }
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        role_rows = filter_role_rows(
+            fetch_role_rows(conn),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+        funding_rows = filter_funding_rows(
+            fetch_funding_rows(conn),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+
+    if include_roles:
+        for row in role_rows:
+            person_id = f"person:{row['person_id']}"
+            org_id = f"org:{row['org_id']}"
+            add_node(person_id, row["person_name"], "person")
+            add_node(org_id, row["org_name"], "organization")
+
+            edges.append(
+                {
+                    "id": f"role:{row['id']}",
+                    "from": person_id,
+                    "to": org_id,
+                    "type": "role",
+                    "label": short_label(row["role_title"]),
+                    "title": row["role_title"],
+                    "year": row["anchor_year"],
+                }
+            )
+
+    if include_funding:
+        donor_id = "country:NO"
+        add_node(donor_id, "Norge", "country", "Donor")
+
+        for row in funding_rows:
+            org_id = f"org:{row['org_id']}"
+            add_node(org_id, row["org_name"], "organization")
+
+            amount_for_label, label_currency, _, _ = funding_amount_fields(row)
+            edges.append(
+                {
+                    "id": f"funding:{row['id']}",
+                    "from": donor_id,
+                    "to": org_id,
+                    "type": "funding",
+                    "label": format_amount(amount_for_label, label_currency),
+                    "title": row["funding_channel"] or "Funding",
+                    "year": row["fiscal_year"],
+                }
+            )
+
+    connected = {e["from"] for e in edges} | {e["to"] for e in edges}
+    filtered_nodes = [n for nid, n in nodes.items() if nid in connected]
+
+    stats = {
+        "nodes": len(filtered_nodes),
+        "edges": len(edges),
+        "role_edges": sum(1 for e in edges if e["type"] == "role"),
+        "funding_edges": sum(1 for e in edges if e["type"] == "funding"),
+    }
+
+    return JSONResponse({"nodes": filtered_nodes, "edges": edges, "stats": stats})
+
+
+@app.get("/api/timeline")
+def timeline(
+    q: str | None = Query(default=None),
+    year_from: int | None = Query(default=None),
+    year_to: int | None = Query(default=None),
+) -> JSONResponse:
+    dsn = get_dsn()
+    roles_by_year = defaultdict(int)
+    funding_flows_by_year = defaultdict(int)
+    funding_nok_by_year = defaultdict(float)
+    funding_usd_by_year = defaultdict(float)
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        role_rows = filter_role_rows(
+            fetch_role_rows(conn),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+        funding_rows = filter_funding_rows(
+            fetch_funding_rows(conn),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+
+    for row in role_rows:
+        year = row["anchor_year"]
+        if year is None:
+            continue
+        roles_by_year[year] += 1
+
+    for row in funding_rows:
+        year = row["fiscal_year"]
+        if year is None:
+            continue
+        funding_flows_by_year[year] += 1
+
+        _, _, amount_nok, amount_original = funding_amount_fields(row)
+        if amount_nok is not None:
+            funding_nok_by_year[year] += amount_nok
+        elif amount_original is not None and (row["currency_code"] or "").upper() == "USD":
+            funding_usd_by_year[year] += amount_original
+
+    all_years = sorted(
+        set(roles_by_year)
+        | set(funding_flows_by_year)
+        | set(funding_nok_by_year)
+        | set(funding_usd_by_year)
+    )
+
+    if not all_years and year_from is not None and year_to is not None and year_to >= year_from:
+        all_years = list(range(year_from, year_to + 1))
+
+    payload = {
+        "years": all_years,
+        "role_starts": [roles_by_year[y] for y in all_years],
+        "funding_flows": [funding_flows_by_year[y] for y in all_years],
+        "funding_nok": [round(funding_nok_by_year[y], 2) for y in all_years],
+        "funding_usd": [round(funding_usd_by_year[y], 2) for y in all_years],
+    }
+    return JSONResponse(payload)
+
+
+@app.get("/api/toplists")
+def toplists(
+    q: str | None = Query(default=None),
+    year_from: int | None = Query(default=None),
+    year_to: int | None = Query(default=None),
+) -> JSONResponse:
+    dsn = get_dsn()
+
+    org_funding: dict[int, dict[str, Any]] = {}
+    org_roles: dict[int, dict[str, Any]] = {}
+    person_roles: dict[int, dict[str, Any]] = {}
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        role_rows = filter_role_rows(
+            fetch_role_rows(conn),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+        funding_rows = filter_funding_rows(
+            fetch_funding_rows(conn),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+
+    for row in funding_rows:
+        org_id = int(row["org_id"])
+        bucket = org_funding.setdefault(
+            org_id,
+            {
+                "org_name": row["org_name"],
+                "nok_total": 0.0,
+                "usd_total": 0.0,
+                "flow_count": 0,
+            },
+        )
+        bucket["flow_count"] += 1
+        _, _, amount_nok, amount_original = funding_amount_fields(row)
+        if amount_nok is not None:
+            bucket["nok_total"] += amount_nok
+        elif amount_original is not None and (row["currency_code"] or "").upper() == "USD":
+            bucket["usd_total"] += amount_original
+
+    for row in role_rows:
+        org_id = int(row["org_id"])
+        org_bucket = org_roles.setdefault(
+            org_id,
+            {
+                "org_name": row["org_name"],
+                "role_count": 0,
+                "people": set(),
+            },
+        )
+        org_bucket["role_count"] += 1
+        org_bucket["people"].add(int(row["person_id"]))
+
+        person_id = int(row["person_id"])
+        person_bucket = person_roles.setdefault(
+            person_id,
+            {
+                "person_name": row["person_name"],
+                "role_count": 0,
+                "orgs": set(),
+            },
+        )
+        person_bucket["role_count"] += 1
+        person_bucket["orgs"].add(org_id)
+
+    org_funding_top = sorted(
+        org_funding.values(),
+        key=lambda x: (x["nok_total"], x["flow_count"], x["usd_total"]),
+        reverse=True,
+    )[:12]
+
+    org_role_top = sorted(
+        (
+            {
+                "org_name": v["org_name"],
+                "role_count": v["role_count"],
+                "person_count": len(v["people"]),
+            }
+            for v in org_roles.values()
+        ),
+        key=lambda x: (x["role_count"], x["person_count"]),
+        reverse=True,
+    )[:12]
+
+    person_role_top = sorted(
+        (
+            {
+                "person_name": v["person_name"],
+                "role_count": v["role_count"],
+                "org_count": len(v["orgs"]),
+            }
+            for v in person_roles.values()
+        ),
+        key=lambda x: (x["role_count"], x["org_count"]),
+        reverse=True,
+    )[:12]
+
+    return JSONResponse(
+        {
+            "org_funding_top": org_funding_top,
+            "org_role_top": org_role_top,
+            "person_role_top": person_role_top,
+        }
+    )
+
+
+@app.get("/api/coboard")
+def coboard(
+    q: str | None = Query(default=None),
+    year_from: int | None = Query(default=None),
+    year_to: int | None = Query(default=None),
+) -> JSONResponse:
+    dsn = get_dsn()
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        role_rows = filter_role_rows(
+            fetch_role_rows(conn),
+            q=q,
+            year_from=year_from,
+            year_to=year_to,
+        )
+
+    person_to_orgs: dict[int, dict[str, Any]] = {}
+    for row in role_rows:
+        person_id = int(row["person_id"])
+        bucket = person_to_orgs.setdefault(
+            person_id,
+            {
+                "person_name": row["person_name"],
+                "orgs": {},
+            },
+        )
+        bucket["orgs"][int(row["org_id"])] = row["org_name"]
+
+    pair_to_meta: dict[tuple[int, int], dict[str, Any]] = {}
+    org_degree = defaultdict(int)
+    org_names: dict[int, str] = {}
+
+    for person_bucket in person_to_orgs.values():
+        org_items = sorted(person_bucket["orgs"].items())
+        for org_id, org_name in org_items:
+            org_names[org_id] = org_name
+
+        for (o1, n1), (o2, n2) in combinations(org_items, 2):
+            key = (o1, o2)
+            meta = pair_to_meta.setdefault(
+                key,
+                {"count": 0, "person_names": []},
+            )
+            meta["count"] += 1
+            if len(meta["person_names"]) < 8:
+                meta["person_names"].append(person_bucket["person_name"])
+
+            org_degree[o1] += 1
+            org_degree[o2] += 1
+            org_names[o1] = n1
+            org_names[o2] = n2
+
+    nodes = [
+        {
+            "id": f"org:{pid}",
+            "label": name,
+            "type": "organization",
+            "degree": org_degree[pid],
+        }
+        for pid, name in org_names.items()
+        if org_degree[pid] > 0
+    ]
+
+    edges = []
+    for (o1, o2), meta in pair_to_meta.items():
+        edges.append(
+            {
+                "id": f"coboard:{o1}:{o2}",
+                "from": f"org:{o1}",
+                "to": f"org:{o2}",
+                "type": "coboard",
+                "shared_count": meta["count"],
+                "person_names": sorted(set(meta["person_names"])),
+                "label": str(meta["count"]),
+            }
+        )
+
+    edges.sort(key=lambda e: e["shared_count"], reverse=True)
+
+    return JSONResponse(
+        {
+            "nodes": nodes,
+            "edges": edges,
+            "stats": {
+                "nodes": len(nodes),
+                "edges": len(edges),
+                "max_shared": max((e["shared_count"] for e in edges), default=0),
+            },
+        }
+    )
+
+
+@app.get("/api/edge/{edge_id}")
+def edge_details(edge_id: str) -> JSONResponse:
+    if ":" not in edge_id:
+        raise HTTPException(status_code=400, detail="Invalid edge id")
+
+    kind, _, raw_id = edge_id.partition(":")
+    if not raw_id.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid edge id")
+
+    row_id = int(raw_id)
+    dsn = get_dsn()
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        if kind == "role":
+            row = conn.execute(
+                """
+                SELECT
+                  r.id,
+                  r.role_title,
+                  r.role_level,
+                  r.norwegian_position_before,
+                  r.announced_on,
+                  r.start_on,
+                  r.end_on,
+                  p.canonical_name AS person_name,
+                  o.canonical_name AS org_name
+                FROM role_event r
+                JOIN person p ON p.id = r.person_id
+                JOIN organization o ON o.id = r.organization_id
+                WHERE r.id = %s
+                """,
+                (row_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Role edge not found")
+
+            sources = conn.execute(
+                """
+                SELECT
+                  s.source_name,
+                  s.url,
+                  s.doc_type,
+                  rsd.relation_type
+                FROM role_event_source_document rsd
+                JOIN source_document s ON s.id = rsd.source_document_id
+                WHERE rsd.role_event_id = %s
+                ORDER BY s.id
+                """,
+                (row_id,),
+            ).fetchall()
+
+            payload = {
+                "edge_id": edge_id,
+                "kind": "role",
+                "title": row["role_title"],
+                "summary": f"{row['person_name']} -> {row['org_name']}",
+                "metadata": {
+                    "role_level": row["role_level"],
+                    "announced_on": str(row["announced_on"]) if row["announced_on"] else None,
+                    "start_on": str(row["start_on"]) if row["start_on"] else None,
+                    "end_on": str(row["end_on"]) if row["end_on"] else None,
+                    "norwegian_position_before": row["norwegian_position_before"],
+                },
+                "sources": [
+                    {
+                        "source_name": s["source_name"],
+                        "url": s["url"],
+                        "doc_type": s["doc_type"],
+                        "relation_type": s["relation_type"],
+                    }
+                    for s in sources
+                ],
+            }
+            return JSONResponse(payload)
+
+        if kind == "funding":
+            row = conn.execute(
+                """
+                SELECT
+                  f.id,
+                  f.funding_channel,
+                  f.amount_nok,
+                  f.amount_original,
+                  f.currency_code,
+                  f.fiscal_year,
+                  f.period_start,
+                  f.period_end,
+                  f.notes,
+                  o.canonical_name AS org_name
+                FROM funding_flow f
+                JOIN organization o ON o.id = f.recipient_organization_id
+                WHERE f.id = %s
+                """,
+                (row_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Funding edge not found")
+
+            sources = conn.execute(
+                """
+                SELECT
+                  s.source_name,
+                  s.url,
+                  s.doc_type,
+                  fsd.relation_type
+                FROM funding_flow_source_document fsd
+                JOIN source_document s ON s.id = fsd.source_document_id
+                WHERE fsd.funding_flow_id = %s
+                ORDER BY s.id
+                """,
+                (row_id,),
+            ).fetchall()
+
+            amount = row["amount_nok"]
+            currency = "NOK"
+            if amount is None and row["amount_original"] is not None:
+                amount = row["amount_original"]
+                currency = row["currency_code"] or "USD"
+
+            payload = {
+                "edge_id": edge_id,
+                "kind": "funding",
+                "title": row["funding_channel"] or "Funding",
+                "summary": f"Norge -> {row['org_name']}",
+                "metadata": {
+                    "amount": format_amount(amount, currency),
+                    "currency": currency,
+                    "fiscal_year": row["fiscal_year"],
+                    "period_start": str(row["period_start"]) if row["period_start"] else None,
+                    "period_end": str(row["period_end"]) if row["period_end"] else None,
+                    "notes": row["notes"],
+                },
+                "sources": [
+                    {
+                        "source_name": s["source_name"],
+                        "url": s["url"],
+                        "doc_type": s["doc_type"],
+                        "relation_type": s["relation_type"],
+                    }
+                    for s in sources
+                ],
+            }
+            return JSONResponse(payload)
+
+    raise HTTPException(status_code=404, detail="Edge type not supported")

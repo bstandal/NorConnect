@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="no">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NONGO Visualisering</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://unpkg.com/vis-network@9.1.9/styles/vis-network.min.css"
+      rel="stylesheet"
+      type="text/css"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb bg-orb-a"></div>
+    <div class="bg-orb bg-orb-b"></div>
+
+    <header class="topbar">
+      <div>
+        <h1>NONGO Analysepanel</h1>
+        <p>Graf, tidslinje og nettverksindikatorer i ett grensesnitt</p>
+      </div>
+      <div class="stats" id="stats"></div>
+    </header>
+
+    <section class="controls">
+      <label>
+        Søk
+        <input id="q" type="text" placeholder="Person, organisasjon, rolle, kanal" />
+      </label>
+      <label>
+        År fra
+        <input id="year-from" type="number" min="1900" max="2100" placeholder="2010" />
+      </label>
+      <label>
+        År til
+        <input id="year-to" type="number" min="1900" max="2100" placeholder="2026" />
+      </label>
+      <label class="toggle">
+        <input id="include-roles" type="checkbox" checked />
+        Roller
+      </label>
+      <label class="toggle">
+        <input id="include-funding" type="checkbox" checked />
+        Finansiering
+      </label>
+      <button id="apply">Oppdater</button>
+    </section>
+
+    <main class="layout">
+      <section class="viz-card">
+        <div class="view-tabs">
+          <button class="view-btn active" data-view="graph">Nettverk</button>
+          <button class="view-btn" data-view="timeline">Tidslinje</button>
+          <button class="view-btn" data-view="toplists">Topplister</button>
+          <button class="view-btn" data-view="coboard">Brokoblinger</button>
+        </div>
+
+        <div class="view-pane active" id="view-graph">
+          <div id="graph"></div>
+        </div>
+
+        <div class="view-pane" id="view-timeline">
+          <div class="chart-grid two-col">
+            <div class="chart-card">
+              <h3>Roller og utbetalinger over tid</h3>
+              <canvas id="timeline-roles"></canvas>
+            </div>
+            <div class="chart-card">
+              <h3>Beløp over tid (NOK/USD)</h3>
+              <canvas id="timeline-funding"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="view-pane" id="view-toplists">
+          <div class="chart-grid two-col">
+            <div class="chart-card">
+              <h3>Topp organisasjoner (NOK)</h3>
+              <canvas id="top-org-funding"></canvas>
+            </div>
+            <div class="chart-card">
+              <h3>Topp personer (antall roller)</h3>
+              <canvas id="top-person-roles"></canvas>
+            </div>
+          </div>
+          <div class="inline-list" id="toplist-text"></div>
+        </div>
+
+        <div class="view-pane" id="view-coboard">
+          <div id="co-network"></div>
+        </div>
+      </section>
+
+      <aside class="details-card" id="details">
+        <h2>Kildepanel</h2>
+        <p>Klikk på en edge i grafen for detaljer og primærkilder.</p>
+      </aside>
+    </main>
+
+    <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
